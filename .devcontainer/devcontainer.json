@@ -1,0 +1,31 @@
+{
+  "name": "CUDA Development Environment",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "runArgs": [
+    "--gpus",
+    "all"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-vscode.cpptools-extension-pack",
+        "ms-vscode.cpptools-themes"
+      ],
+      "settings": {
+        "cmake.configureOnOpen": true,
+        "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "/bin/bash"
+          }
+        }
+      }
+    }
+  },
+  "remoteUser": "vscode"
+}
