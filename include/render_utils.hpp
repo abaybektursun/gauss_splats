@@ -5,6 +5,7 @@
 #include "gaussian.hpp"
 #include "camera.hpp"
 #include <vector> 
+#include <cmath>
 
 /**
  * @brief Converts a positive float to its raw 32-bit representation.
@@ -104,3 +105,15 @@ void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
                        std::vector<int>& tileRangeStart,
                        std::vector<int>& tileRangeEnd);
 
+
+
+
+/**
+ * @brief Updates the camera parameters based on the orbit angle.
+ *
+ * @param angleZ The rotation angle around the Z-axis.
+ * @param camera The orthographic camera parameters to update.
+ * @param sceneMin The minimum bounds of the scene.
+ * @param sceneMax The maximum bounds of the scene.
+ */
+void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin, const float3& sceneMax);

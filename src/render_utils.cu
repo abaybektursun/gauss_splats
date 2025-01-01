@@ -193,3 +193,47 @@ void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
         tileRangeEnd[lastTile] = (int)h_sortedSplats.size();
     }
 }
+
+void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin, const float3& sceneMax)
+{
+    float cx = 0.5f * (sceneMin.x + sceneMax.x);
+    float cy = 0.5f * (sceneMin.y + sceneMax.y);
+    float dx = 0.5f * (sceneMax.x - sceneMin.x);
+    float dy = 0.5f * (sceneMax.y - sceneMin.y);
+
+    float cosA = cosf(angleZ);
+    float sinA = sinf(angleZ);
+
+    // Define the four corners of the bounding box relative to the center
+    float corners[4][2] = {
+        {-dx, -dy},
+        { dx, -dy},
+        { dx,  dy},
+        {-dx,  dy}
+    };
+
+    float minX = 1e30f, maxX = -1e30f;
+    float minY = 1e30f, maxY = -1e30f;
+
+    // Rotate each corner and find the new bounding box
+    for(int i = 0; i < 4; ++i){
+        float x = corners[i][0];
+        float y = corners[i][1];
+        // Rotate
+        float rx = x * cosA - y * sinA;
+        float ry = x * sinA + y * cosA;
+        // Translate back to original center
+        rx += cx;
+        ry += cy;
+        // Update bounding box
+        if(rx < minX) minX = rx;
+        if(rx > maxX) maxX = rx;
+        if(ry < minY) minY = ry;
+        if(ry > maxY) maxY = ry;
+    }
+
+    camera.xMin = minX;
+    camera.xMax = maxX;
+    camera.yMin = minY;
+    camera.yMax = maxY;
+}
