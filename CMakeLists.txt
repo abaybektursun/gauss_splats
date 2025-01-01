@@ -5,6 +5,9 @@ project(GaussianSplats CUDA CXX)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
+find_package(OpenGL REQUIRED)
+find_package(SDL2 REQUIRED)  # or use a FindSDL2.cmake script
+
 # Find required packages
 find_package(CUDA REQUIRED)
 # Thrust is included with CUDA
@@ -26,5 +29,11 @@ add_library(gaussian_lib
 )
 
 # Add executable
-add_executable(gaussian_splats src/main.cu)
-target_link_libraries(gaussian_splats PRIVATE gaussian_lib)
+#add_executable(gaussian_splats src/main.cu)
+add_executable(gaussian_splats src/main_interactive_splats.cu)
+target_link_libraries(gaussian_splats 
+    PRIVATE 
+        gaussian_lib
+        OpenGL::GL
+        SDL2::SDL2
+)

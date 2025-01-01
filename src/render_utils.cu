@@ -79,7 +79,7 @@ void alphaBlend(float4& dest, const float4& src)
  * Kernel: for each tile (block), blend all its splats in thread order.
  */
 __global__
-void tiledBlendingKernel(const ProjectedSplat*  d_inSplats,
+void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
                          float4*               d_outImage,
                          const int*            d_tileRangeStart,
                          const int*            d_tileRangeEnd,
@@ -91,43 +91,65 @@ void tiledBlendingKernel(const ProjectedSplat*  d_inSplats,
     int end   = d_tileRangeEnd[tileIndex];
     if (start >= end) return;
 
+    /* For 64x64 image and tile_size=16 (64^2/16^2=16):
+    0    1   2   3     <- blockIdx.x TileY 0
+    4    5   6   7     <- blockIdx.x TileY 1
+    8    9  10  11     <- blockIdx.x TileY 2
+    12  13  14  15     <- blockIdx.x TileY 3
+    */
+
     int tilesInX = cam.imageWidth / tile_size;
     int tileX    = tileIndex % tilesInX;
     int tileY    = tileIndex / tilesInX;
 
+    // Where does this tile start in the image?
     int tileOriginX = tileX * tile_size;
     int tileOriginY = tileY * tile_size;
 
     int localIdx = threadIdx.x;
     if (localIdx >= tile_size * tile_size) return;
 
+    // Coordinates in the block
     int localY = localIdx / tile_size;
     int localX = localIdx % tile_size;
+    // Coordinates in the image
     int globalX = tileOriginX + localX;
     int globalY = tileOriginY + localY;
     int globalPixelIdx = globalY * cam.imageWidth + globalX;
 
+    // TODO: make this dynamic based on tile_size
     __shared__ float4 tilePixels[256];  // tile_size=16 => 16*16=256
     tilePixels[localIdx] = d_outImage[globalPixelIdx];
     __syncthreads();
 
+    // Blend each splat in range
     for (int i = start; i < end; i++) {
         ProjectedSplat s = d_inSplats[i];
-        if (s.pixelX == globalX && s.pixelY == globalY) {
-            Gaussian3D* gPtr = s.gaussian;
-            float4 srcColor;
-            srcColor.x = gPtr->color.x;
-            srcColor.y = gPtr->color.y;
-            srcColor.z = gPtr->color.z;
-            srcColor.w = gPtr->opacity;
+        Gaussian3D* gPtr = s.gaussian;
 
+        // Build the source color
+        float4 srcColor = make_float4(gPtr->color.x,
+                                      gPtr->color.y,
+                                      gPtr->color.z,
+                                      gPtr->opacity);
+
+        // === NEW: If globalX, globalY is within +/-1 of s.pixelX, s.pixelY
+        //           then alphaBlend. That covers a 3x3 block for each splat.
+        //           Increase or decrease this range as you like.
+        const int radius = 1; // half-size of your dot
+        if (abs(globalX - s.pixelX) <= radius &&
+            abs(globalY - s.pixelY) <= radius)
+        {
+            // Now do your alphaBlend
             alphaBlend(tilePixels[localIdx], srcColor);
 
+            // Optionally break if fully opaque
             if (tilePixels[localIdx].w > 0.999f) {
-                break; // early-out
+                break;
             }
         }
     }
+
 
     __syncthreads();
     d_outImage[globalPixelIdx] = tilePixels[localIdx];

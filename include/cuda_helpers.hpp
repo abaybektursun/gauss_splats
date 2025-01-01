@@ -4,16 +4,24 @@
 #include <chrono>
 #include <functional>
 #include <iostream>
+#include <iomanip> // For setw
 
 /**
- * @brief A simple CPU helper function to measure time of a given lambda or functor.
+ * @brief A simple CPU helper function to measure time with aligned output.
  */
 inline void measureTime(const std::string& label, const std::function<void()>& run) {
     auto start = std::chrono::high_resolution_clock::now();
     run();
     auto end   = std::chrono::high_resolution_clock::now();
-    auto ms    = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << label << " took " << ms << " ms\n";
+    auto us    = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    
+    // Format with aligned columns: <label> <spaces> <time> μs
+    const int labelWidth = 30;  // Adjust this value based on your longest label
+    const int timeWidth = 10;   // Width for the timing value
+    
+    std::cout << std::left << std::setw(labelWidth) << label 
+              << std::right << std::setw(timeWidth) << std::fixed << std::setprecision(3)
+              << (us / 1000.0) << " μs\n";
 }
 
 /**

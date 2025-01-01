@@ -4,8 +4,12 @@
     "dockerfile": "Dockerfile"
   },
   "runArgs": [
-    "--gpus",
-    "all"
+    "--gpus=all",
+    "-e", "DISPLAY=${env:DISPLAY}",
+    "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
+    "-e", "NVIDIA_DRIVER_CAPABILITIES=all",
+    "--device=/dev/dri:/dev/dri",
+    "--group-add", "105" 
   ],
   "customizations": {
     "vscode": {
