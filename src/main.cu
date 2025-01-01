@@ -17,6 +17,8 @@ bool loadPlyFile(const std::string& filePath,
                  std::vector<int>& outFaces,
                  int& vertexCount, int& faceCount);
 
+
+
 int main()
 {
     // Example usage: load a PLY file
@@ -108,19 +110,21 @@ int main()
 
     // Sort by tileID then by depth (as 64-bit key)
     thrust::device_vector<unsigned long long> d_keys(vertexCount);
+    // Transform each ProjectedSplat into a 64-bit key for sorting:
     thrust::transform(
         thrust::device_pointer_cast(d_outSplats),
         thrust::device_pointer_cast(d_outSplats + vertexCount),
         d_keys.begin(),
-        [] __device__ (const ProjectedSplat& s) {
-            // pack tileID (high bits) + approximate depth (low bits)
-            // this is simplistic. Consider better ways for floats -> bits
-            unsigned long long tilePart = (static_cast<unsigned long long>(s.tileID) & 0xFFFFFFFFull) << 32;
-            unsigned long long depthPart= static_cast<unsigned long long>(s.depth * 1e6) & 0xFFFFFFFFull;
-            return (tilePart | depthPart);
+        [] __device__ (const ProjectedSplat& s)
+        {
+            // tileID in high bits, depth in low bits
+            // so that we sort primarily by tileID, and secondarily by depth
+            return packTileDepth(s.tileID, s.depth);
         }
     );
 
+    
+    // Now sort by the keys:
     thrust::device_ptr<ProjectedSplat> d_splats_ptr(d_outSplats);
     thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
 
@@ -170,7 +174,8 @@ int main()
                width*height*sizeof(float4),
                cudaMemcpyDeviceToHost);
 
-    // [Optional] Save or display the final h_image.
+    // Save image to disk
+
 
     // Cleanup
     cudaFree(d_splats);
