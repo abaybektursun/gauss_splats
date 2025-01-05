@@ -53,6 +53,11 @@ __device__ inline unsigned long long packTileDepth(int tileID, float depth)
 }
 
 
+struct float2x2 {
+    float2 row1;
+    float2 row2;
+};
+
 /**
  * @brief Holds the result of projecting a Gaussian into 2D.
  */
@@ -61,6 +66,9 @@ struct ProjectedSplat {
     float depth;       // z-value for sorting
     int pixelX;        // Final 2D pixel coordinate (u)
     int pixelY;        // Final 2D pixel coordinate (v)
+    float2x2 sigma2D;  // Screen-space covariance matrix
+    int2 bboxMin;      // Bounding box min (u_min, v_min)
+    int2 bboxMax;      // Bounding box max (u_max, v_max)
     Gaussian3D* gaussian;  // Pointer to the original Gaussian
 };
 

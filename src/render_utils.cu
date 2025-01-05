@@ -81,6 +81,11 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
     float sigma32 = M31 * R21 + M32 * R22 + M33 * R23;
     float sigma33 = M31 * R31 + M32 * R32 + M33 * R33;
     
+    // Screen-space covariance matrix
+    // | s_x^2*sigma11  s_x*s_y*sigma12 |
+    // | s_x*s_y*sigma12 s_y^2*sigma22  |
+    float screenSigma11 = s_x * s_x * sigma11; float screenSigma12 = s_x * s_y * sigma12;
+    float screenSigma22 = s_y * s_y * sigma22; float screenSigma13 = s_x * s_y * sigma22;
 
     int u, v;
     orthographicProject(x, y, cam, u, v);
