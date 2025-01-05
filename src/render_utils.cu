@@ -30,9 +30,57 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= numGaussians) return;
 
-    float x = d_gaussians[idx].position.x;
-    float y = d_gaussians[idx].position.y;
-    float z = d_gaussians[idx].position.z;
+    Gaussian3D g = d_gaussians[idx];
+
+    float x = g.position.x;
+    float y = g.position.y;
+    float z = g.position.z;
+
+    float s_x = g.scale.x;
+    float s_y = g.scale.y;
+    float s_z = g.scale.z;
+
+    // Scale Matrix: S
+    // | s_x  0   0 |
+    // | 0   s_y  0 |
+    // | 0    0  s_z|
+
+    // Convert Quaternion to Rotation Matrix: R
+    // | 1-2y^2-2z^2  2xy-2zw      2xz+2yw     |
+    // | 2xy+2zw      1-2x^2-2z^2  2yz-2xw     |
+    // | 2xz-2yw      2yz+2xw      1-2x^2-2y^2 |
+
+    float  R11 = 1 - 2 * g.rotation.y * g.rotation.y - 2 * g.rotation.z * g.rotation.z;
+    float  R12 = 2 * g.rotation.x * g.rotation.y - 2 * g.rotation.z * g.rotation.w;
+    float  R13 = 2 * g.rotation.x * g.rotation.z + 2 * g.rotation.y * g.rotation.w;
+    float  R21 = 2 * g.rotation.x * g.rotation.y + 2 * g.rotation.z * g.rotation.w;
+    float  R22 = 1 - 2 * g.rotation.x * g.rotation.x - 2 * g.rotation.z * g.rotation.z;
+    float  R23 = 2 * g.rotation.y * g.rotation.z - 2 * g.rotation.x * g.rotation.w;
+    float  R31 = 2 * g.rotation.x * g.rotation.z - 2 * g.rotation.y * g.rotation.w;
+    float  R32 = 2 * g.rotation.y * g.rotation.z + 2 * g.rotation.x * g.rotation.w;
+    float  R33 = 1 - 2 * g.rotation.x * g.rotation.x - 2 * g.rotation.y * g.rotation.y;
+
+    // Sigma = R * S * R^T = M * R^T; 
+    // M = R * S
+    float M11 = R11 * s_x;  float M12 = R12 * s_y; float M13 = R13 * s_z;
+    float M21 = R21 * s_x;  float M22 = R22 * s_y; float M23 = R23 * s_z;
+    float M31 = R31 * s_x;  float M32 = R32 * s_y; float M33 = R33 * s_z;
+
+    // Sigma = M * R^T
+    // R^T = | R11 R21 R31 |
+    //       | R12 R22 R32 |
+    //       | R13 R23 R33 |
+
+    float sigma11 = M11 * R11 + M12 * R12 + M13 * R13;
+    float sigma12 = M11 * R21 + M12 * R22 + M13 * R23;
+    float sigma13 = M11 * R31 + M12 * R32 + M13 * R33;
+    float sigma21 = M21 * R11 + M22 * R12 + M23 * R13;
+    float sigma22 = M21 * R21 + M22 * R22 + M23 * R23;
+    float sigma23 = M21 * R31 + M22 * R32 + M23 * R33;
+    float sigma31 = M31 * R11 + M32 * R12 + M33 * R13;
+    float sigma32 = M31 * R21 + M32 * R22 + M33 * R23;
+    float sigma33 = M31 * R31 + M32 * R32 + M33 * R33;
+    
 
     int u, v;
     orthographicProject(x, y, cam, u, v);
