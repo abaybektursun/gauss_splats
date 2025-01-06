@@ -271,10 +271,14 @@ void alphaBlend(float4& dest, const float4& src)
 
     if (alphaAccum < 1.0f && alphaSplat > 0.0f) {
         float oneMinusA = 1.0f - alphaAccum;
+        //printf("Before blend: dest=(%.3f, %.3f, %.3f, %.3f) src=(%.3f, %.3f, %.3f, %.3f)\n", 
+        //       dest.x, dest.y, dest.z, dest.w, src.x, src.y, src.z, src.w);
         dest.x += oneMinusA * alphaSplat * src.x;
         dest.y += oneMinusA * alphaSplat * src.y;
         dest.z += oneMinusA * alphaSplat * src.z;
         dest.w += oneMinusA * alphaSplat;
+        //printf("After blend: dest=(%.3f, %.3f, %.3f, %.3f)\n", 
+        //       dest.x, dest.y, dest.z, dest.w);
     }
 }
 
@@ -289,6 +293,11 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
                          OrthoCameraParams     cam,
                          int                   tile_size)
 {
+    // TODO: temporary, remove this after tile_size is dynamic
+    if (tile_size != 16) {
+        printf("ERROR: tile_size temporarily must be 16\n");
+        return;
+    }
     int tileIndex = blockIdx.x;
     int start = d_tileRangeStart[tileIndex];
     int end   = d_tileRangeEnd[tileIndex];
@@ -325,34 +334,70 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
     tilePixels[localIdx] = d_outImage[globalPixelIdx];
     __syncthreads();
 
-    // Blend each splat in range
+
+    // Loop over splats in this tile
     for (int i = start; i < end; i++) {
         ProjectedSplat s = d_inSplats[i];
         Gaussian3D* gPtr = s.gaussian;
+        if (gPtr == nullptr) {
+            printf("Thread (%d): gPtr is nullptr\\n", threadIdx.x);
+            continue;
+        }
 
-        // Build the source color
-        float4 srcColor = make_float4(gPtr->color.x,
-                                      gPtr->color.y,
-                                      gPtr->color.z,
-                                      gPtr->opacity);
-
-        // === NEW: If globalX, globalY is within +/-1 of s.pixelX, s.pixelY
-        //           then alphaBlend. That covers a 3x3 block for each splat.
-        //           Increase or decrease this range as you like.
-        const int radius = 1; // half-size of your dot
-        if (abs(globalX - s.pixelX) <= radius &&
-            abs(globalY - s.pixelY) <= radius)
+        // Check if current pixel lies within the splat's bounding box
+        if (globalX >= s.bboxMin.x && globalX <= s.bboxMax.x &&
+            globalY >= s.bboxMin.y && globalY <= s.bboxMax.y)
         {
-            // Now do your alphaBlend
-            alphaBlend(tilePixels[localIdx], srcColor);
+            // Compute delta between pixel and splat center
+            float deltaX = globalX - s.pixelX;
+            float deltaY = globalY - s.pixelY;
+            float2 delta = make_float2(deltaX, deltaY);
 
-            // Optionally break if fully opaque
-            if (tilePixels[localIdx].w > 0.999f) {
-                break;
+            // Compute exponent for Gaussian weight
+            float a = s.sigma2D.row1.x;
+            float b = s.sigma2D.row1.y; // Same as s.sigma2D.row2.x
+            float c = s.sigma2D.row2.y;
+            float det = a * c - b * b;
+            if (fabs(det) < 1e-6f) {
+                printf("Thread (%d): Determinant too small. det=%f\n", threadIdx.x, det);
+                continue; // Skip if determinant is too small
             }
+
+            float invDet = 1.0f / det;
+            // Inverse of sigma2D
+            float invA =  invDet * c;
+            float invB = -invDet * b;
+            float invC =  invDet * a;
+            // Compute exponent
+            float e = -0.5f * (delta.x * (invA * delta.x + invB * delta.y) +
+                               delta.y * (invB * delta.x + invC * delta.y));
+            // Compute weight
+            float weight = expf(e);
+            // Skip if weight is negligible
+            if (weight < 1e-4f) {
+                printf("Thread (%d): Weight too small. e=%f weight=%f\n", threadIdx.x, e, weight);
+                continue;
+            }
+
+
+            // Compute source color with weight
+            float alpha = gPtr->opacity * weight;
+            float4 srcColor = make_float4(gPtr->color.x * weight,
+                                          gPtr->color.y * weight,
+                                          gPtr->color.z * weight,
+                                          alpha);
+            
+
+            //printf("Color: r=%f g=%f b=%f a=%f\n", 
+            //srcColor.x, srcColor.y, srcColor.z, srcColor.w);
+
+            // **Add printf to check values before blending**
+            //printf("Thread (%d): Blending at pixel (%d,%d) with alpha=%f\n", threadIdx.x, globalX, globalY, alpha);
+
+            // Alpha blend
+            alphaBlend(tilePixels[localIdx], srcColor);
         }
     }
-
 
     __syncthreads();
     d_outImage[globalPixelIdx] = tilePixels[localIdx];

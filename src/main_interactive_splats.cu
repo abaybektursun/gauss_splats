@@ -15,11 +15,10 @@
 #include "render_utils.hpp"
 #include "cuda_helpers.hpp"
 
-// Forward-declare your PLY loading function
-bool loadPlyFile(const std::string& filePath,
-                 std::vector<float3>& outVertices,
-                 std::vector<int>& outFaces,
-                 int& vertexCount, int& faceCount);
+#include "tinyply.h"
+
+const int WINDOW_WIDTH = 512*2;
+const int WINDOW_HEIGHT = 512*2;
 
 
 struct BoundingSphere {
@@ -120,9 +119,10 @@ int main() {
     SDL_Window* window = SDL_CreateWindow(
         "Gaussian Splats Viewer",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        512, 512,
+        WINDOW_WIDTH, WINDOW_HEIGHT,
         SDL_WINDOW_SHOWN
     );
+
 
     if (!window) {
         std::cerr << "Window creation failed: " << SDL_GetError() << std::endl;
@@ -138,11 +138,12 @@ int main() {
         return 1;
     }
 
+    // Replace texture creation with:
     SDL_Texture* texture = SDL_CreateTexture(
         renderer,
         SDL_PIXELFORMAT_RGBA32,
         SDL_TEXTUREACCESS_STREAMING,
-        512, 512
+        WINDOW_WIDTH, WINDOW_HEIGHT
     );
 
     if (!texture) {
@@ -157,13 +158,65 @@ int main() {
     std::string file_path = "/workspaces/gauss_splats/airplane.ply.txt";
     std::vector<float3> originalVertices;
     std::vector<int> faces;
+    std::vector<float3> originalColors;
     int vertexCount = 0, faceCount = 0;
     
-    if (!loadPlyFile(file_path, originalVertices, faces, vertexCount, faceCount)) {
+    // OLD CODE
+    /*if (!loadPlyFile(file_path, originalVertices, faces, vertexCount, faceCount)) {
         SDL_DestroyTexture(texture);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
+        return 1;
+    }*/
+    // New code 
+    try {
+        // Open the PLY file
+        std::ifstream file("/workspaces/gauss_splats/Tree.ply", std::ios::binary);
+        if (!file) throw std::runtime_error("Failed to open PLY file.");
+
+        tinyply::PlyFile plyFile;
+        plyFile.parse_header(file);
+
+        // Read vertex properties
+        std::shared_ptr<tinyply::PlyData> vertices, colors;
+        vertices = plyFile.request_properties_from_element("vertex", {"x", "y", "z"});
+        colors = plyFile.request_properties_from_element("vertex", {"red", "green", "blue"});
+
+        plyFile.read(file);
+
+        // Process vertex data
+        std::vector<float> vertexBuffer(vertices->count * 3);
+        std::memcpy(vertexBuffer.data(), vertices->buffer.get(), vertices->buffer.size_bytes());
+
+        std::vector<uint8_t> colorBuffer(colors->count * 3);
+        std::memcpy(colorBuffer.data(), colors->buffer.get(), colors->buffer.size_bytes());
+
+        std::cout << "Read " << vertices->count << " points with color data." << std::endl;
+
+        // Convert and copy data to originalVertices
+        originalVertices.resize(vertices->count);
+        for (size_t i = 0; i < vertices->count; i++) {
+            originalVertices[i] = make_float3(
+                vertexBuffer[i * 3 + 0],
+                vertexBuffer[i * 3 + 1],
+                vertexBuffer[i * 3 + 2]
+            );
+        }
+        vertexCount = vertices->count;
+
+        // Same for colors
+        originalColors.resize(vertices->count);
+        for (size_t i = 0; i < vertices->count; i++) {
+            originalColors[i] = make_float3(
+                colorBuffer[i * 3 + 0] / 255.0f,
+                colorBuffer[i * 3 + 1] / 255.0f,
+                colorBuffer[i * 3 + 2] / 255.0f
+            );
+        }
+        
+    } catch (const std::exception &e) {
+        std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
 
@@ -172,8 +225,8 @@ int main() {
     
     // Set up fixed camera parameters based on bounding sphere
     OrthoCameraParams camera;
-    camera.imageWidth = 512;
-    camera.imageHeight = 512;
+    camera.imageWidth = WINDOW_WIDTH;
+    camera.imageHeight = WINDOW_HEIGHT;
     
     // Calculate fixed camera bounds that will work for any rotation
     float aspectRatio = float(camera.imageWidth) / float(camera.imageHeight);
@@ -202,14 +255,14 @@ int main() {
     ProjectedSplat* d_outSplats = nullptr;
     float3* d_vertices = nullptr;
     
-    cudaMalloc(&d_image, 512 * 512 * sizeof(float4));
+    cudaMalloc(&d_image, camera.imageWidth * camera.imageHeight * sizeof(float4));
     cudaMalloc(&d_splats, vertexCount * sizeof(Gaussian3D));
     cudaMalloc(&d_outSplats, vertexCount * sizeof(ProjectedSplat));
     cudaMalloc(&d_vertices, vertexCount * sizeof(float3));
 
     int tileSize = 16;
-    int tilesInX = 512 / tileSize;
-    int tilesInY = 512 / tileSize;
+    int tilesInX = camera.imageWidth / tileSize;
+    int tilesInY = camera.imageHeight / tileSize;
     int totalTiles = tilesInX * tilesInY;
     
     int *d_tileRangeStart = nullptr, *d_tileRangeEnd = nullptr;
@@ -220,7 +273,13 @@ int main() {
     bool running = true;
     SDL_Event event;
 
+    // TODO: remove
+    int TMP_ITERS = 1000;
     while (running) {
+        // TODO: remove
+        if (TMP_ITERS-- <= 0) {
+            break;
+        }
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 running = false;
@@ -236,18 +295,20 @@ int main() {
         std::vector<Gaussian3D> h_splats(vertexCount);
         for (int i = 0; i < vertexCount; i++) {
             h_splats[i].position = vertices[i];
-            h_splats[i].scale = make_float3(0.05f, 0.05f, 0.05f);
+            h_splats[i].scale = make_float3(0.005f, 0.005f, 0.005f);
             h_splats[i].opacity = 0.5f;
+            // Read the colors from the original data
             h_splats[i].color = make_float3(
-                static_cast<float>(rand()) / RAND_MAX,
-                static_cast<float>(rand()) / RAND_MAX,
-                static_cast<float>(rand()) / RAND_MAX
+                originalColors[i].x,
+                originalColors[i].y,
+                originalColors[i].z
             );
-            h_splats[i].intensity = 0.8f;
+            h_splats[i].intensity = 0.0f;
+            h_splats[i].rotation = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
         }
 
         // Clear image and copy updated data to GPU
-        cudaMemset(d_image, 0, 512 * 512 * sizeof(float4));
+        cudaMemset(d_image, 0, camera.imageWidth * camera.imageHeight * sizeof(float4));
         cudaMemcpy(d_splats, h_splats.data(), vertexCount * sizeof(Gaussian3D), cudaMemcpyHostToDevice);
 
         // Project Gaussians
@@ -294,20 +355,23 @@ int main() {
         cudaDeviceSynchronize();
 
         // Copy result back and update texture
-        std::vector<float4> h_image(512 * 512);
-        cudaMemcpy(h_image.data(), d_image, 512 * 512 * sizeof(float4), cudaMemcpyDeviceToHost);
+        std::vector<float4> h_image(camera.imageWidth * camera.imageHeight);
+        cudaMemcpy(h_image.data(), d_image, camera.imageWidth * camera.imageHeight * sizeof(float4), cudaMemcpyDeviceToHost);
 
-        std::vector<Uint32> pixels(512 * 512);
-        for (int i = 0; i < 512 * 512; i++) {
+        std::vector<Uint32> pixels(camera.imageWidth * camera.imageHeight);
+        for (int i = 0; i < camera.imageWidth * camera.imageHeight; i++) {
             float4 px = h_image[i];
             Uint8 r = (Uint8)(255.f * fminf(fmaxf(px.x, 0.f), 1.f));
             Uint8 g = (Uint8)(255.f * fminf(fmaxf(px.y, 0.f), 1.f));
             Uint8 b = (Uint8)(255.f * fminf(fmaxf(px.z, 0.f), 1.f));
             Uint8 a = (Uint8)(255.f * fminf(fmaxf(px.w, 0.f), 1.f));
-            pixels[i] = (r << 24) | (g << 16) | (b << 8) | a;
+            //Creates RGBA ordering in memory, but SDL interprets this as ABGR (reading right-to-left)
+            //pixels[i] = (r << 24) | (g << 16) | (b << 8) | a;
+            //- Creates ABGR ordering in memory, SDL correctly interprets as RGBA
+            pixels[i] = (r << 0) | (g << 8) | (b << 16) | (a << 24); 
         }
 
-        SDL_UpdateTexture(texture, NULL, pixels.data(), 512 * sizeof(Uint32));
+        SDL_UpdateTexture(texture, NULL, pixels.data(), camera.imageWidth * sizeof(Uint32));
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
         SDL_RenderPresent(renderer);

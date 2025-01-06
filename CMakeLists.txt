@@ -26,6 +26,7 @@ add_library(gaussian_lib
     src/render_utils.cu
     src/camera.cpp
     src/ply_loader.cpp
+    src/tinyply.cpp
 )
 
 # Add executable
