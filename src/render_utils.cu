@@ -17,6 +17,149 @@ __device__ void orthographicProject(float x, float y,
     outV = static_cast<int>(normalizedY * (cam.imageHeight - 1));
 }
 
+// Device functions
+
+/**
+ * @brief Computes the eigenvalues and eigenvectors of a 2x2 symmetric matrix.
+ *
+ * This function computes the eigenvalues and eigenvectors of a symmetric
+ * 2x2 matrix using a numerically stable method.
+ *
+ * The matrix is:
+ *   [ a  b ]
+ *   [ b  c ]
+ *
+ * @param a       Element at (0,0) of the matrix.
+ * @param b       Element at (0,1) and (1,0) of the matrix.
+ * @param c       Element at (1,1) of the matrix.
+ * @param lambda1 Output: Largest eigenvalue.
+ * @param lambda2 Output: Smallest eigenvalue.
+ * @param v1      Output: Eigenvector corresponding to lambda1.
+ * @param v2      Output: Eigenvector corresponding to lambda2.
+ */
+__device__ void computeEigenValuesAndVectors(
+    float a, float b, float c,
+    float& lambda1, float& lambda2,
+    float2& v1, float2& v2)
+{
+    // Compute the trace and determinant of the matrix
+    float trace = a + c;
+    float diff = a - c;
+    float discriminant = sqrtf(diff * diff + 4.0f * b * b);
+
+    // Compute the eigenvalues
+    lambda1 = 0.5f * (trace + discriminant);
+    lambda2 = 0.5f * (trace - discriminant);
+
+    // Compute the eigenvectors
+    if (b != 0.0f)
+    {
+        float t = lambda1 - a;
+        float norm = hypotf(t, b);
+        // avoid division by zero
+        if (norm > 0.0f)
+        {
+            v1 = make_float2(b / norm, t / norm);
+        }
+        else
+        {
+            // Default to a unit vector
+            v1 = make_float2(1.0f, 0.0f);
+        }
+
+        t = lambda2 - a;
+        norm = hypotf(b, t);
+        v2 = make_float2(t / norm, b / norm);
+    }
+    else
+    {
+        // If b is zero, the matrix is diagonal
+        v1 = (a >= c) ? make_float2(1.0f, 0.0f) : make_float2(0.0f, 1.0f);
+        v2 = (a >= c) ? make_float2(0.0f, 1.0f) : make_float2(1.0f, 0.0f);
+    }
+}
+
+/**
+ * @brief Computes the axis-aligned bounding box of an ellipse in screen space.
+ *
+ * Given the 2D covariance matrix of a splat and its screen position, this function
+ * computes the bounding box that fully contains the ellipse representing the splat.
+ *
+ * @param sigma11   Element (0,0) of the 2D covariance matrix.
+ * @param sigma12   Element (0,1) and (1,0) of the 2D covariance matrix.
+ * @param sigma22   Element (1,1) of the 2D covariance matrix.
+ * @param centerX   Center x-coordinate of the ellipse in pixels.
+ * @param centerY   Center y-coordinate of the ellipse in pixels.
+ * @param k         Scaling factor (e.g., 2 for 95% confidence interval).
+ * @param imageWidth  Width of the screen/image in pixels.
+ * @param imageHeight Height of the screen/image in pixels.
+ * @param bboxMin   Output: Minimum (x, y) coordinates of the bounding box.
+ * @param bboxMax   Output: Maximum (x, y) coordinates of the bounding box.
+ */
+__device__ void computeSplatBoundingBox(
+    float sigma11, float sigma12, float sigma22,
+    int centerX, int centerY, float k,
+    int imageWidth, int imageHeight,
+    int2& bboxMin, int2& bboxMax)
+{
+    // Compute eigenvalues and eigenvectors of the covariance matrix
+    float lambda1, lambda2;
+    float2 v1, v2;
+    computeEigenValuesAndVectors(sigma11, sigma12, sigma22, lambda1, lambda2, v1, v2);
+
+    // TEMP DEBUG: TODO REMOVE
+    if (lambda1 < 0.0f || lambda2 < 0.0f) {
+        printf("ERROR: Negative eigenvalues: lambda1=%f, lambda2=%f\n", lambda1, lambda2);
+    }
+    // Compute radii along the principal axes
+    lambda1 = max(lambda1, 0.0f);
+    lambda2 = max(lambda2, 0.0f);
+
+    float radius1 = k * sqrtf(lambda1);
+    float radius2 = k * sqrtf(lambda2);
+
+
+    // Eigenvectors components
+    float cosTheta = v1.x;
+    float sinTheta = v1.y;
+    float vecLength = sqrtf(v1.x * v1.x + v1.y * v1.y);
+    if (vecLength > 0.0f)
+    {
+        cosTheta = v1.x / vecLength;
+        sinTheta = v1.y / vecLength;
+    }
+    else
+    {
+        // Default orientation if eigenvector length is zero
+        cosTheta = 1.0f;
+        sinTheta = 0.0f;
+    }
+
+    // Compute the extents along x and y axes
+    float absCosTheta = fabsf(cosTheta);
+    float absSinTheta = fabsf(sinTheta);
+
+    // Compute half-widths of the bounding box
+    float dx = radius1 * absCosTheta + radius2 * absSinTheta;
+    float dy = radius1 * absSinTheta + radius2 * absCosTheta;
+
+    // Compute bounding box coordinates
+    int minX = static_cast<int>(floorf(centerX - dx));
+    int maxX = static_cast<int>(ceilf(centerX + dx));
+    int minY = static_cast<int>(floorf(centerY - dy));
+    int maxY = static_cast<int>(ceilf(centerY + dy));
+
+    // Clamp to image boundaries
+    minX = max(minX, 0);
+    maxX = min(maxX, imageWidth - 1);
+    minY = max(minY, 0);
+    maxY = min(maxY, imageHeight - 1);
+
+    bboxMin = make_int2(minX, minY);
+    bboxMax = make_int2(maxX, maxY);
+}
+
+
 /**
  * Kernel: project 3D Gaussians to 2D splats.
  */
@@ -36,14 +179,14 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
     float y = g.position.y;
     float z = g.position.z;
 
-    float s_x = g.scale.x;
-    float s_y = g.scale.y;
-    float s_z = g.scale.z;
+    float s_x2 = g.scale.x * g.scale.x;
+    float s_y2 = g.scale.y * g.scale.y;
+    float s_z2 = g.scale.z * g.scale.z;
 
     // Scale Matrix: S
-    // | s_x  0   0 |
-    // | 0   s_y  0 |
-    // | 0    0  s_z|
+    // | s_x2  0   0 |
+    // | 0   s_y2  0 |
+    // | 0    0  s_z2|
 
     // Convert Quaternion to Rotation Matrix: R
     // | 1-2y^2-2z^2  2xy-2zw      2xz+2yw     |
@@ -62,9 +205,9 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
 
     // Sigma = R * S * R^T = M * R^T; 
     // M = R * S
-    float M11 = R11 * s_x;  float M12 = R12 * s_y; float M13 = R13 * s_z;
-    float M21 = R21 * s_x;  float M22 = R22 * s_y; float M23 = R23 * s_z;
-    float M31 = R31 * s_x;  float M32 = R32 * s_y; float M33 = R33 * s_z;
+    float M11 = R11 * s_x2;  float M12 = R12 * s_y2; float M13 = R13 * s_z2;
+    float M21 = R21 * s_x2;  float M22 = R22 * s_y2; float M23 = R23 * s_z2;
+    float M31 = R31 * s_x2;  float M32 = R32 * s_y2; float M33 = R33 * s_z2;
 
     // Sigma = M * R^T
     // R^T = | R11 R21 R31 |
@@ -80,12 +223,15 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
     float sigma31 = M31 * R11 + M32 * R12 + M33 * R13;
     float sigma32 = M31 * R21 + M32 * R22 + M33 * R23;
     float sigma33 = M31 * R31 + M32 * R32 + M33 * R33;
+
+    float ScaleScreenX = (cam.imageWidth - 1) / (cam.xMax - cam.xMin);
+    float ScaleScreenY = (cam.imageHeight - 1) / (cam.yMax - cam.yMin);
     
-    // Screen-space covariance matrix
-    // | s_x^2*sigma11  s_x*s_y*sigma12 |
-    // | s_x*s_y*sigma12 s_y^2*sigma22  |
-    float screenSigma11 = s_x * s_x * sigma11; float screenSigma12 = s_x * s_y * sigma12;
-    float screenSigma22 = s_y * s_y * sigma22; float screenSigma13 = s_x * s_y * sigma22;
+    // Since sigma13 and sigma23 are not involved in u and v, they can be ignored
+    float sigma2D_11 = sigma11 * ScaleScreenX * ScaleScreenX;
+    float sigma2D_12 = sigma12 * ScaleScreenX * ScaleScreenY;
+    float sigma2D_22 = sigma22 * ScaleScreenY * ScaleScreenY;    
+
 
     int u, v;
     orthographicProject(x, y, cam, u, v);
@@ -106,6 +252,10 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
     d_outSplats[idx].depth   = z;
     d_outSplats[idx].pixelX  = u;
     d_outSplats[idx].pixelY  = v;
+    d_outSplats[idx].sigma2D.row1 = make_float2(sigma2D_11, sigma2D_12);
+    d_outSplats[idx].sigma2D.row2 = make_float2(sigma2D_12, sigma2D_22);
+    computeSplatBoundingBox(sigma2D_11, sigma2D_12, sigma2D_22, u, v, 2.0f, cam.imageWidth, cam.imageHeight,
+                            d_outSplats[idx].bboxMin, d_outSplats[idx].bboxMax);
     // Pointer to the original Gaussian
     d_outSplats[idx].gaussian = (Gaussian3D*)&d_gaussians[idx];
 }

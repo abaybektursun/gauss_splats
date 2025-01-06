@@ -67,6 +67,7 @@ struct ProjectedSplat {
     int pixelX;        // Final 2D pixel coordinate (u)
     int pixelY;        // Final 2D pixel coordinate (v)
     float2x2 sigma2D;  // Screen-space covariance matrix
+    // These are not camera min and max, but the bounding box of the splat
     int2 bboxMin;      // Bounding box min (u_min, v_min)
     int2 bboxMax;      // Bounding box max (u_max, v_max)
     Gaussian3D* gaussian;  // Pointer to the original Gaussian
