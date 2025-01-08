@@ -25,6 +25,7 @@ add_library(gaussian_lib
     src/gaussian.cu
     src/render_utils.cu
     src/camera.cpp
+    src/camera_gpu.cu
     src/ply_loader.cpp
     src/tinyply.cpp
 )

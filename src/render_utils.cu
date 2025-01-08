@@ -359,7 +359,7 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
             float c = s.sigma2D.row2.y;
             float det = a * c - b * b;
             if (fabs(det) < 1e-6f) {
-                printf("Thread (%d): Determinant too small. det=%f\n", threadIdx.x, det);
+                //printf("Thread (%d): Determinant too small. det=%f\n", threadIdx.x, det);
                 continue; // Skip if determinant is too small
             }
 
@@ -375,7 +375,7 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
             float weight = expf(e);
             // Skip if weight is negligible
             if (weight < 1e-4f) {
-                printf("Thread (%d): Weight too small. e=%f weight=%f\n", threadIdx.x, e, weight);
+                //printf("Thread (%d): Weight too small. e=%f weight=%f\n", threadIdx.x, e, weight);
                 continue;
             }
 
@@ -406,6 +406,7 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
 /**
  * CPU utility: compute tileRangeStart / tileRangeEnd from sorted splats on the host.
  */
+
 void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
                        int totalTiles,
                        std::vector<int>& tileRangeStart,
@@ -439,6 +440,28 @@ void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
     int lastTile = h_sortedSplats.back().tileID;
     if (lastTile >= 0 && lastTile < totalTiles) {
         tileRangeEnd[lastTile] = (int)h_sortedSplats.size();
+    }
+}
+
+__global__
+void scatterTileRanges(const int* uniqueTileIDs,
+                       const int* tileStarts,
+                       const int* tileEnds,
+                       int*       d_tileRangeStart,
+                       int*       d_tileRangeEnd,
+                       int        numUniqueTiles,
+                       int        totalTiles)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= numUniqueTiles) return;
+
+    int tile = uniqueTileIDs[i];
+    // Check tile is in range
+    if (tile >= 0 && tile < totalTiles)
+    {
+        d_tileRangeStart[tile] = tileStarts[i];
+        // +1 so that tileRangeEnd is "one past" the last index, as in your CPU function
+        d_tileRangeEnd[tile]   = tileEnds[i] + 1;
     }
 }
 

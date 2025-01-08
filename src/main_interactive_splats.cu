@@ -9,16 +9,39 @@
 #include <thrust/host_vector.h>
 #include <thrust/sort.h>
 #include <thrust/extrema.h>
+#include <thrust/iterator/discard_iterator.h>
 
 #include "camera.hpp"
 #include "gaussian.hpp"
 #include "render_utils.hpp"
 #include "cuda_helpers.hpp"
+#include "camera_gpu.cu"
 
 #include "tinyply.h"
 
 const int WINDOW_WIDTH = 512*2;
 const int WINDOW_HEIGHT = 512*2;
+
+struct FPSCounter {
+    Uint32 frameCount = 0;
+    Uint32 lastTime = 0;
+    float currentFPS = 0.0f;
+    
+    void update() {
+        frameCount++;
+        Uint32 currentTime = SDL_GetTicks();
+        
+        // Update FPS every second
+        if (currentTime - lastTime > 1000) {
+            currentFPS = frameCount * 1000.0f / (currentTime - lastTime);
+            printf("\rFPS: %.1f", currentFPS);
+            fflush(stdout);
+            
+            frameCount = 0;
+            lastTime = currentTime;
+        }
+    }
+};
 
 
 struct BoundingSphere {
@@ -30,8 +53,10 @@ struct MouseState {
     bool leftButtonDown = false;
     int lastX = 0;
     int lastY = 0;
-    float rotationX = 0.0f;
-    float rotationY = 0.0f;
+    float totalRotationX = 0.0f;  // Track total rotation
+    float totalRotationY = 0.0f;
+    float lastRotationX = 0.0f;   // Track last frame's rotation
+    float lastRotationY = 0.0f;
 };
 
 BoundingSphere calculateBoundingSphere(const std::vector<float3>& vertices) {
@@ -68,6 +93,9 @@ void handleMouseEvent(SDL_Event& event, MouseState& mouseState) {
                 mouseState.leftButtonDown = true;
                 mouseState.lastX = event.button.x;
                 mouseState.lastY = event.button.y;
+                // Store current rotation when starting drag
+                mouseState.lastRotationX = mouseState.totalRotationX;
+                mouseState.lastRotationY = mouseState.totalRotationY;
             }
             break;
             
@@ -79,29 +107,50 @@ void handleMouseEvent(SDL_Event& event, MouseState& mouseState) {
             
         case SDL_MOUSEMOTION:
             if (mouseState.leftButtonDown) {
-                int deltaX = event.motion.x - mouseState.lastX;
-                int deltaY = event.motion.y - mouseState.lastY;
-                
-                mouseState.rotationX += deltaY * 0.005f;
-                mouseState.rotationY += deltaX * 0.005f;
-                
-                mouseState.lastX = event.motion.x;
-                mouseState.lastY = event.motion.y;
+                // Convert mouse position to rotation angles
+                mouseState.totalRotationX = mouseState.lastRotationX + 
+                    (event.motion.y - mouseState.lastY) * (2.0f * M_PI / WINDOW_HEIGHT);
+                mouseState.totalRotationY = mouseState.lastRotationY + 
+                    (event.motion.x - mouseState.lastX) * (2.0f * M_PI / WINDOW_WIDTH);
             }
             break;
     }
 }
 
+/*
 void rotateVertices(std::vector<float3>& vertices, const MouseState& mouseState, const float3& center) {
-    // Create rotation matrix around center point
-    glm::mat4 toOrigin = glm::translate(glm::mat4(1.0f), glm::vec3(-center.x, -center.y, -center.z));
-    glm::mat4 fromOrigin = glm::translate(glm::mat4(1.0f), glm::vec3(center.x, center.y, center.z));
-    
-    glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), mouseState.rotationY, glm::vec3(0.0f, 1.0f, 0.0f));
-    rotation = glm::rotate(rotation, mouseState.rotationX, glm::vec3(1.0f, 0.0f, 0.0f));
-    
+    // 1) Translate the object so that 'center' is at the origin (0,0,0).
+    //    This lets us rotate around the center.
+    glm::mat4 toOrigin = glm::translate(glm::mat4(1.0f),
+                                        glm::vec3(-center.x, -center.y, -center.z));
+
+    // 2) Translate back from the origin to the original 'center' location
+    //    after the rotation. Essentially an inverse of 'toOrigin'.
+    glm::mat4 fromOrigin = glm::translate(glm::mat4(1.0f),
+                                          glm::vec3(center.x, center.y, center.z));
+
+    // 3) Create a rotation matrix around the Y-axis by 'mouseState.rotationY'.
+    //    GLM angle param is in radians, so if rotationY is e.g. 0.5, that’s ~28.65°.
+    glm::mat4 rotation = glm::rotate(glm::mat4(1.0f),
+                                     mouseState.rotationY,
+                                     glm::vec3(0.0f, 1.0f, 0.0f));
+
+    // 4) Then rotate around the X-axis by 'mouseState.rotationX'.
+    //    This modifies the same matrix 'rotation'.
+    rotation = glm::rotate(rotation,
+                           mouseState.rotationX,
+                           glm::vec3(1.0f, 0.0f, 0.0f));
+
+    // 5) Combine all transforms:
+    //    - Move the model to origin
+    //    - Rotate
+    //    - Move back
+    //    The final transform matrix is 'fromOrigin * rotation * toOrigin'.
     glm::mat4 transform = fromOrigin * rotation * toOrigin;
-    
+
+    // 6) Apply this transform to every vertex in the vector.
+    //    Each vertex is treated as (x, y, z, 1) in homogeneous coordinates,
+    //    then multiplied by the 4x4 matrix.
     for (auto& vertex : vertices) {
         glm::vec4 rotated = transform * glm::vec4(vertex.x, vertex.y, vertex.z, 1.0f);
         vertex.x = rotated.x;
@@ -109,6 +158,7 @@ void rotateVertices(std::vector<float3>& vertices, const MouseState& mouseState,
         vertex.z = rotated.z;
     }
 }
+*/
 
 int main() {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -169,10 +219,11 @@ int main() {
         SDL_Quit();
         return 1;
     }*/
+
     // New code 
     try {
         // Open the PLY file
-        std::ifstream file("/workspaces/gauss_splats/Tree.ply", std::ios::binary);
+        std::ifstream file("/workspaces/gauss_splats/dragon.ply", std::ios::binary);
         if (!file) throw std::runtime_error("Failed to open PLY file.");
 
         tinyply::PlyFile plyFile;
@@ -259,6 +310,10 @@ int main() {
     cudaMalloc(&d_splats, vertexCount * sizeof(Gaussian3D));
     cudaMalloc(&d_outSplats, vertexCount * sizeof(ProjectedSplat));
     cudaMalloc(&d_vertices, vertexCount * sizeof(float3));
+    cudaMemcpy(d_vertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
+    float3* d_originalVertices = nullptr;  // Add this with other GPU allocations
+    cudaMalloc(&d_originalVertices, vertexCount * sizeof(float3));
+    cudaMemcpy(d_originalVertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
 
     int tileSize = 16;
     int tilesInX = camera.imageWidth / tileSize;
@@ -273,8 +328,28 @@ int main() {
     bool running = true;
     SDL_Event event;
 
+    FPSCounter fpsCounter;
+
+    std::vector<Gaussian3D> h_splats(vertexCount);
+    for (int i = 0; i < vertexCount; i++) {
+        h_splats[i].position = originalVertices[i];
+        h_splats[i].scale = make_float3(0.4f, 0.4f, 0.4f);
+        h_splats[i].opacity = 0.5f;
+        // Read the colors from the original data
+        h_splats[i].color = make_float3(
+            originalColors[i].x,
+            originalColors[i].y,
+            originalColors[i].z
+        );
+        h_splats[i].intensity = 0.0f;
+        h_splats[i].rotation = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+    // Copy updated data to GPU
+    cudaMemcpy(d_splats, h_splats.data(), vertexCount * sizeof(Gaussian3D), cudaMemcpyHostToDevice);
+
     // TODO: remove
-    int TMP_ITERS = 1000;
+    int TMP_ITERS = 500;
     while (running) {
         // TODO: remove
         if (TMP_ITERS-- <= 0) {
@@ -287,29 +362,16 @@ int main() {
             handleMouseEvent(event, mouseState);
         }
 
-        // Create a copy of vertices for this frame and rotate them
-        std::vector<float3> vertices = originalVertices;
-        rotateVertices(vertices, mouseState, boundingSphere.center);
+        // We can set d_inVertices and d_outVertices to the same pointer because each thread 
+        // maps to a different vertex in the array
+        rotateVerticesOnGPU(
+            d_originalVertices, d_vertices, vertexCount, d_splats,
+            mouseState.totalRotationX, mouseState.totalRotationY, boundingSphere.center
+        );
 
-        // Update Gaussians with rotated positions
-        std::vector<Gaussian3D> h_splats(vertexCount);
-        for (int i = 0; i < vertexCount; i++) {
-            h_splats[i].position = vertices[i];
-            h_splats[i].scale = make_float3(0.005f, 0.005f, 0.005f);
-            h_splats[i].opacity = 0.5f;
-            // Read the colors from the original data
-            h_splats[i].color = make_float3(
-                originalColors[i].x,
-                originalColors[i].y,
-                originalColors[i].z
-            );
-            h_splats[i].intensity = 0.0f;
-            h_splats[i].rotation = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
-        }
-
-        // Clear image and copy updated data to GPU
-        cudaMemset(d_image, 0, camera.imageWidth * camera.imageHeight * sizeof(float4));
-        cudaMemcpy(d_splats, h_splats.data(), vertexCount * sizeof(Gaussian3D), cudaMemcpyHostToDevice);
+        // TODO: logically veryfiy we need to sync
+        cudaDeviceSynchronize();
+        cudaMemset(d_image, 0, camera.imageWidth * camera.imageHeight * sizeof(float4));  
 
         // Project Gaussians
         int blockSize = 256;
@@ -333,17 +395,72 @@ int main() {
         thrust::device_ptr<ProjectedSplat> d_splats_ptr(d_outSplats);
         thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
 
-        // Compute and copy tile ranges
-        std::vector<ProjectedSplat> h_splatsSorted(vertexCount);
-        cudaMemcpy(h_splatsSorted.data(), d_outSplats, vertexCount * sizeof(ProjectedSplat), cudaMemcpyDeviceToHost);
 
-        std::vector<int> h_tileRangeStart(totalTiles, -1);
-        std::vector<int> h_tileRangeEnd(totalTiles, -1);
-        computeTileRanges(h_splatsSorted, totalTiles, h_tileRangeStart, h_tileRangeEnd);
+        // 1) Fill tileRangeStart and tileRangeEnd on the device with -1
+        thrust::device_ptr<int> d_startPtr(d_tileRangeStart);
+        thrust::device_ptr<int> d_endPtr(d_tileRangeEnd);
+        thrust::fill(d_startPtr, d_startPtr + totalTiles, -1);
+        thrust::fill(d_endPtr,   d_endPtr + totalTiles,   -1);
 
-        cudaMemcpy(d_tileRangeStart, h_tileRangeStart.data(), totalTiles * sizeof(int), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_tileRangeEnd, h_tileRangeEnd.data(), totalTiles * sizeof(int), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_outSplats, h_splatsSorted.data(), vertexCount * sizeof(ProjectedSplat), cudaMemcpyHostToDevice);
+        // 2) Create an array of indices [0, 1, 2, ...] for the splats
+        thrust::device_vector<int> d_indices(vertexCount);
+        thrust::sequence(d_indices.begin(), d_indices.end());
+
+        // 3) Extract tileIDs from the sorted splats
+        thrust::device_vector<int> d_tileIDs(vertexCount);
+        thrust::transform(
+            thrust::device_pointer_cast(d_outSplats),
+            thrust::device_pointer_cast(d_outSplats + vertexCount),
+            d_tileIDs.begin(),
+            [] __device__ (const ProjectedSplat &s) {
+                return s.tileID;
+            }
+        );
+
+        // 4) reduce_by_key for min and max indices
+        thrust::device_vector<int> d_tileIDsOut(vertexCount);
+        thrust::device_vector<int> d_tileStartsOut(vertexCount);
+        thrust::device_vector<int> d_tileEndsOut(vertexCount);
+
+        // (a) find the FIRST index for each tile
+        auto min_end = thrust::reduce_by_key(
+            d_tileIDs.begin(), d_tileIDs.end(),  // keys
+            d_indices.begin(),                   // values
+            d_tileIDsOut.begin(),               // output keys
+            d_tileStartsOut.begin(),            // output values (min indices)
+            thrust::equal_to<int>(),
+            thrust::minimum<int>()
+        );
+
+        // (b) find the LAST index for each tile
+        auto max_end = thrust::reduce_by_key(
+            d_tileIDs.begin(), d_tileIDs.end(),
+            d_indices.begin(),
+            thrust::make_discard_iterator(),    // we don't need to store keys again
+            d_tileEndsOut.begin(),
+            thrust::equal_to<int>(),
+            thrust::maximum<int>()
+        );
+
+        // how many unique tiles did we actually get?
+        int numUniqueTiles = static_cast<int>(min_end.first - d_tileIDsOut.begin());
+
+        // 5) Scatter results directly on the GPU
+        // We'll launch a kernel to write tileRangeStart[tile], tileRangeEnd[tile].
+        {
+            int blockSize = 256;
+            int gridSize = (numUniqueTiles + blockSize - 1) / blockSize;
+            scatterTileRanges<<<gridSize, blockSize>>>(
+                thrust::raw_pointer_cast(d_tileIDsOut.data()),
+                thrust::raw_pointer_cast(d_tileStartsOut.data()),
+                thrust::raw_pointer_cast(d_tileEndsOut.data()),
+                d_tileRangeStart,
+                d_tileRangeEnd,
+                numUniqueTiles,
+                totalTiles
+            );
+            cudaDeviceSynchronize();
+        }
 
         // Render
         dim3 blocks(totalTiles, 1, 1);
@@ -375,8 +492,9 @@ int main() {
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
         SDL_RenderPresent(renderer);
+        fpsCounter.update();
 
-        SDL_Delay(16); // roughly 60 FPS
+        //SDL_Delay(16); // roughly 60 FPS
     }
 
     // Cleanup
@@ -386,6 +504,7 @@ int main() {
     cudaFree(d_image);
     cudaFree(d_tileRangeStart);
     cudaFree(d_tileRangeEnd);
+    cudaFree(d_originalVertices);
 
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);

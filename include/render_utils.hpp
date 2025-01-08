@@ -114,8 +114,14 @@ void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
                        std::vector<int>& tileRangeStart,
                        std::vector<int>& tileRangeEnd);
 
-
-
+__global__
+void scatterTileRanges(const int* uniqueTileIDs,
+                       const int* tileStarts,
+                       const int* tileEnds,
+                       int*       d_tileRangeStart,
+                       int*       d_tileRangeEnd,
+                       int        numUniqueTiles,
+                       int        totalTiles);
 
 /**
  * @brief Updates the camera parameters based on the orbit angle.
