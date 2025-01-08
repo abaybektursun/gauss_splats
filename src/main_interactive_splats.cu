@@ -19,8 +19,8 @@
 
 #include "tinyply.h"
 
-const int WINDOW_WIDTH = 512*2;
-const int WINDOW_HEIGHT = 512*2;
+const int WINDOW_WIDTH = 512*1.5;
+const int WINDOW_HEIGHT = 512*1.5;
 
 struct FPSCounter {
     Uint32 frameCount = 0;
@@ -315,7 +315,7 @@ int main() {
     cudaMalloc(&d_originalVertices, vertexCount * sizeof(float3));
     cudaMemcpy(d_originalVertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
 
-    int tileSize = 16;
+    int tileSize = 8;
     int tilesInX = camera.imageWidth / tileSize;
     int tilesInY = camera.imageHeight / tileSize;
     int totalTiles = tilesInX * tilesInY;
@@ -333,8 +333,8 @@ int main() {
     std::vector<Gaussian3D> h_splats(vertexCount);
     for (int i = 0; i < vertexCount; i++) {
         h_splats[i].position = originalVertices[i];
-        h_splats[i].scale = make_float3(0.4f, 0.4f, 0.4f);
-        h_splats[i].opacity = 0.5f;
+        h_splats[i].scale = make_float3(0.1f, 0.1f, 0.1f);
+        h_splats[i].opacity = 1.0f;
         // Read the colors from the original data
         h_splats[i].color = make_float3(
             originalColors[i].x,
@@ -374,10 +374,10 @@ int main() {
         cudaMemset(d_image, 0, camera.imageWidth * camera.imageHeight * sizeof(float4));  
 
         // Project Gaussians
-        int blockSize = 256;
+        int blockSize = tileSize*tileSize;
         int gridSize = (vertexCount + blockSize - 1) / blockSize;
         projectGaussiansKernel<<<gridSize, blockSize>>>(
-            d_splats, d_outSplats, vertexCount, camera, 16
+            d_splats, d_outSplats, vertexCount, camera, tileSize
         );
         cudaDeviceSynchronize();
 
@@ -426,8 +426,8 @@ int main() {
         auto min_end = thrust::reduce_by_key(
             d_tileIDs.begin(), d_tileIDs.end(),  // keys
             d_indices.begin(),                   // values
-            d_tileIDsOut.begin(),               // output keys
-            d_tileStartsOut.begin(),            // output values (min indices)
+            d_tileIDsOut.begin(),                // output keys
+            d_tileStartsOut.begin(),             // output values (min indices)
             thrust::equal_to<int>(),
             thrust::minimum<int>()
         );
@@ -448,7 +448,7 @@ int main() {
         // 5) Scatter results directly on the GPU
         // We'll launch a kernel to write tileRangeStart[tile], tileRangeEnd[tile].
         {
-            int blockSize = 256;
+            int blockSize = tileSize*tileSize;
             int gridSize = (numUniqueTiles + blockSize - 1) / blockSize;
             scatterTileRanges<<<gridSize, blockSize>>>(
                 thrust::raw_pointer_cast(d_tileIDsOut.data()),

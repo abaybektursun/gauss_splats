@@ -294,8 +294,8 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
                          int                   tile_size)
 {
     // TODO: temporary, remove this after tile_size is dynamic
-    if (tile_size != 16) {
-        printf("ERROR: tile_size temporarily must be 16\n");
+    if (tile_size > 32) {
+        printf("ERROR: tile_size max is 32\n");
         return;
     }
     int tileIndex = blockIdx.x;
@@ -330,7 +330,7 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
     int globalPixelIdx = globalY * cam.imageWidth + globalX;
 
     // TODO: make this dynamic based on tile_size
-    __shared__ float4 tilePixels[256];  // tile_size=16 => 16*16=256
+    __shared__ float4 tilePixels[1024];  // for now max is 32x32
     tilePixels[localIdx] = d_outImage[globalPixelIdx];
     __syncthreads();
 

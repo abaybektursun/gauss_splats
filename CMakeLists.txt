@@ -30,6 +30,12 @@ add_library(gaussian_lib
     src/tinyply.cpp
 )
 
+# Add these lines after your existing CMAKE_CUDA_FLAGS
+#set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -lineinfo -G")
+
+# For better debug info, you might also want to disable optimization in Debug mode
+#set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -g")
+
 # Add executable
 #add_executable(gaussian_splats src/main.cu)
 add_executable(gaussian_splats src/main_interactive_splats.cu)
