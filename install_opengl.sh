@@ -43,3 +43,6 @@ sudo apt-get install -y \
     libsm6 \
     libxext6 \
     libxrender1
+
+# Train
+sudo apt-get install libopencv-dev -y
