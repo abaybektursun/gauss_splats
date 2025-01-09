@@ -3,11 +3,8 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
 #include <thrust/sort.h>
-#include <thrust/extrema.h>
-#include <thrust/iterator/discard_iterator.h>
+#include <thrust/device_vector.h>
 
 #include "camera.hpp"
 #include "gaussian.hpp"
@@ -134,72 +131,7 @@ int main() {
         thrust::device_ptr<ProjectedSplat> d_splats_ptr(d_outSplats);
         thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
 
-
-        // 1) Fill tileRangeStart and tileRangeEnd on the device with -1
-        thrust::device_ptr<int> d_startPtr(d_tileRangeStart);
-        thrust::device_ptr<int> d_endPtr(d_tileRangeEnd);
-        thrust::fill(d_startPtr, d_startPtr + totalTiles, -1);
-        thrust::fill(d_endPtr,   d_endPtr + totalTiles,   -1);
-
-        // 2) Create an array of indices [0, 1, 2, ...] for the splats
-        thrust::device_vector<int> d_indices(vertexCount);
-        thrust::sequence(d_indices.begin(), d_indices.end());
-
-        // 3) Extract tileIDs from the sorted splats
-        thrust::device_vector<int> d_tileIDs(vertexCount);
-        thrust::transform(
-            thrust::device_pointer_cast(d_outSplats),
-            thrust::device_pointer_cast(d_outSplats + vertexCount),
-            d_tileIDs.begin(),
-            [] __device__ (const ProjectedSplat &s) {
-                return s.tileID;
-            }
-        );
-
-        // 4) reduce_by_key for min and max indices
-        thrust::device_vector<int> d_tileIDsOut(vertexCount);
-        thrust::device_vector<int> d_tileStartsOut(vertexCount);
-        thrust::device_vector<int> d_tileEndsOut(vertexCount);
-
-        // (a) find the FIRST index for each tile
-        auto min_end = thrust::reduce_by_key(
-            d_tileIDs.begin(), d_tileIDs.end(),  // keys
-            d_indices.begin(),                   // values
-            d_tileIDsOut.begin(),                // output keys
-            d_tileStartsOut.begin(),             // output values (min indices)
-            thrust::equal_to<int>(),
-            thrust::minimum<int>()
-        );
-
-        // (b) find the LAST index for each tile
-        auto max_end = thrust::reduce_by_key(
-            d_tileIDs.begin(), d_tileIDs.end(),
-            d_indices.begin(),
-            thrust::make_discard_iterator(),    // we don't need to store keys again
-            d_tileEndsOut.begin(),
-            thrust::equal_to<int>(),
-            thrust::maximum<int>()
-        );
-
-        // how many unique tiles did we actually get?
-        int numUniqueTiles = static_cast<int>(min_end.first - d_tileIDsOut.begin());
-
-        // 5) Scatter results directly on the GPU
-        // We'll launch a kernel to write tileRangeStart[tile], tileRangeEnd[tile].
-        {
-            int blockSize = tileSize*tileSize;
-            int gridSize = (numUniqueTiles + blockSize - 1) / blockSize;
-            scatterTileRanges<<<gridSize, blockSize>>>(
-                thrust::raw_pointer_cast(d_tileIDsOut.data()),
-                thrust::raw_pointer_cast(d_tileStartsOut.data()),
-                thrust::raw_pointer_cast(d_tileEndsOut.data()),
-                d_tileRangeStart,
-                d_tileRangeEnd,
-                numUniqueTiles,
-                totalTiles
-            );
-            cudaDeviceSynchronize();
-        }
+        generateTileRanges(d_outSplats, totalTiles, tileSize, vertexCount, d_tileRangeStart, d_tileRangeEnd);
 
         // Render
         dim3 blocks(totalTiles, 1, 1);

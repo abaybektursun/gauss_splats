@@ -132,3 +132,11 @@ void scatterTileRanges(const int* uniqueTileIDs,
  * @param sceneMax The maximum bounds of the scene.
  */
 void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin, const float3& sceneMax);
+
+void generateTileRanges(
+    const ProjectedSplat* d_outSplats,
+    int totalTiles,
+    int tileSize,
+    int vertexCount,
+    int* d_tileRangeStart,
+    int* d_tileRangeEnd);
