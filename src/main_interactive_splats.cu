@@ -14,13 +14,12 @@
 #include "ply_utils.cu"
 #include "sdl_utils.cu"
 
-const short WINDOW_WIDTH = 512*1.5;
-const short WINDOW_HEIGHT = 512*1.5;
+const short WINDOW_WIDTH = 512*2.0;
+const short WINDOW_HEIGHT = 512*2.0;
 
 int main() {
     SDLApp app(WINDOW_WIDTH, WINDOW_HEIGHT);
     if (!app.init("Gaussian Splats Viewer")) {
-        // Handle error (already printed in init)
         return 1;
     }
 
@@ -29,12 +28,9 @@ int main() {
     std::vector<float3> originalColors;
     int vertexCount = 0;
     std::vector<Gaussian3D> h_splats(0); // Will be resized in read_init_ply
-    read_init_ply(originalVertices, vertexCount, originalColors, h_splats);
+    read_init_ply(originalVertices, vertexCount, originalColors, h_splats, 0.995);
     
-
-    // Calculate bounding sphere once
     BoundingSphere boundingSphere = calculateBoundingSphere(originalVertices);
-    // Set up fixed camera parameters based on bounding sphere
     OrthoCameraParams camera;
     camera.imageWidth = WINDOW_WIDTH;
     camera.imageHeight = WINDOW_HEIGHT;
@@ -42,7 +38,7 @@ int main() {
     
     // Calculate fixed camera bounds that will work for any rotation
     float aspectRatio = float(camera.imageWidth) / float(camera.imageHeight);
-    float margin = 1.0f; // Add some margin around the object
+    float margin = 1.0f; // >1.0 to add some margin around the object
     float radius = boundingSphere.radius * margin;
 
     // Calculate the half-width and half-height of our view volume
@@ -62,89 +58,113 @@ int main() {
 
 
     // Allocate CUDA resources
-    float4* d_image = nullptr;
-    Gaussian3D* d_splats = nullptr;
-    ProjectedGaussian_small* d_outSplats = nullptr;
-    float3* d_vertices = nullptr;
-    
-    cudaMalloc(&d_image, camera.imageWidth * camera.imageHeight * sizeof(float4));
-    cudaMalloc(&d_splats, vertexCount * sizeof(Gaussian3D));
-    cudaMalloc(&d_outSplats, vertexCount * sizeof(ProjectedGaussian_small));
-    cudaMalloc(&d_vertices, vertexCount * sizeof(float3));
-    cudaMemcpy(d_vertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
-    float3* d_originalVertices = nullptr;  // Add this with other GPU allocations
-    cudaMalloc(&d_originalVertices, vertexCount * sizeof(float3));
-    cudaMemcpy(d_originalVertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
+    GPUData gpuData;
 
-    int tileSize = 8;
-    int tilesInX = camera.imageWidth / tileSize;
-    int tilesInY = camera.imageHeight / tileSize;
-    int totalTiles = tilesInX * tilesInY;
+    const int tileSize = 16;
+    const int tilesInX = camera.imageWidth / tileSize;
+    const int tilesInY = camera.imageHeight / tileSize;
+    const int totalTiles = tilesInX * tilesInY;
+    const int blockSize = tileSize*tileSize;
+    const int gridSize = (vertexCount + blockSize - 1) / blockSize;
     
-    int *d_tileRangeStart = nullptr, *d_tileRangeEnd = nullptr;
-    cudaMalloc(&d_tileRangeStart, totalTiles * sizeof(int));
-    cudaMalloc(&d_tileRangeEnd, totalTiles * sizeof(int));
+    cudaMalloc(&gpuData.d_tileRangeStart, totalTiles * sizeof(int));
+    cudaMalloc(&gpuData.d_tileRangeEnd, totalTiles * sizeof(int));
+    cudaMalloc(&gpuData.d_image, camera.imageWidth * camera.imageHeight * sizeof(float4));
+    cudaMalloc(&gpuData.d_outSplats, vertexCount * sizeof(ProjectedGaussian));
+    cudaMalloc(&gpuData.d_vertices, vertexCount * sizeof(float3));
+    cudaMemcpy(gpuData.d_vertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
 
-    MouseState mouseState;
-    bool running = true;
+    cudaMalloc(&gpuData.d_originalVertices, vertexCount * sizeof(float3));
+    cudaMemcpy(gpuData.d_originalVertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
+    
+    cudaMalloc(&gpuData.d_splats, vertexCount * sizeof(Gaussian3D));
+    cudaMemcpy(gpuData.d_splats, h_splats.data(), vertexCount * sizeof(Gaussian3D), cudaMemcpyHostToDevice);
+
+    cudaMalloc(&gpuData.d_splatCounts, vertexCount * sizeof(int));
+    cudaMalloc(&gpuData.d_splatOffsets, vertexCount * sizeof(int));
+
     SDL_Event event;
-
-    FPSCounter fpsCounter;
-
-
-    // Copy updated data to GPU
-    cudaMemcpy(d_splats, h_splats.data(), vertexCount * sizeof(Gaussian3D), cudaMemcpyHostToDevice);
-
+    bool running = true;
+    MouseState mouseState;
     while (running) {
         app.processEvents(mouseState, running, event);
 
         // We can set d_inVertices and d_outVertices to the same pointer because each thread 
         // maps to a different vertex in the array
         rotateVerticesOnGPU(
-            d_originalVertices, d_vertices, vertexCount, d_splats,
+            gpuData.d_originalVertices, gpuData.d_vertices, vertexCount, gpuData.d_splats,
             mouseState.totalRotationX, mouseState.totalRotationY, boundingSphere.center
         );
 
-        // TODO: logically veryfiy we need to sync
-        cudaDeviceSynchronize();
-        cudaMemset(d_image, 0, camera.imageWidth * camera.imageHeight * sizeof(float4));  
+        // Clear image
+        cudaMemset(gpuData.d_image, 0, camera.imageWidth * camera.imageHeight * sizeof(float4));  
 
         // Project Gaussians
-        int blockSize = tileSize*tileSize;
-        int gridSize = (vertexCount + blockSize - 1) / blockSize;
-        projectGaussiansKernel_small<<<gridSize, blockSize>>>(
-            d_splats, d_outSplats, vertexCount, camera, tileSize
+        projectGaussiansKernel<<<gridSize, blockSize>>>(
+            gpuData.d_splats, gpuData.d_outSplats, vertexCount, camera, tileSize
         );
         cudaDeviceSynchronize();
 
-        // Sort by tileID then depth
-        thrust::device_vector<unsigned long long> d_keys(vertexCount);
-        thrust::transform(
-            thrust::device_pointer_cast(d_outSplats),
-            thrust::device_pointer_cast(d_outSplats + vertexCount),
-            d_keys.begin(),
-            [] __device__ (const ProjectedGaussian_small& s) {
-                return packTileDepth(s.tileID, s.depth);
-            }
+        // Count how many tiles each splat covers
+        countTilesKernel<<<gridSize, blockSize>>>(gpuData.d_outSplats, vertexCount, tileSize, tilesInX, tilesInY, gpuData.d_splatCounts);
+
+        // Prefix Sum of d_splatCounts into d_splatOffsets (exclisuve scan)
+        thrust::device_ptr<int> d_splatCounts_ptr(gpuData.d_splatCounts);
+        thrust::device_ptr<int> d_splatOffsets_ptr(gpuData.d_splatOffsets);
+        thrust::exclusive_scan(d_splatCounts_ptr, d_splatCounts_ptr + vertexCount, d_splatOffsets_ptr);
+
+        // We copy that integer from device memory to host memory:
+        int lastOffset, lastCount;
+        cudaMemcpy(
+            &lastOffset,  // destination in host memory
+            thrust::raw_pointer_cast(d_splatOffsets_ptr + (vertexCount - 1)),
+            sizeof(int),
+            cudaMemcpyDeviceToHost
+        );
+        cudaMemcpy(
+            &lastCount,  // destination in host memory
+            thrust::raw_pointer_cast(d_splatCounts_ptr + (vertexCount - 1)),
+            sizeof(int),
+            cudaMemcpyDeviceToHost
         );
 
-        thrust::device_ptr<ProjectedGaussian_small> d_splats_ptr(d_outSplats);
-        thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
+        // Allocate GPU array d_tileSplats of size totalTileSplats.
+        int totalTileSplats = lastCount + lastOffset;
+        cudaMalloc(&gpuData.d_tileSplats, totalTileSplats * sizeof(TileSplat));
 
-        generateTileRanges_small(d_outSplats, totalTiles, tileSize, vertexCount, d_tileRangeStart, d_tileRangeEnd);
+        expandTilesKernel<<<gridSize, blockSize>>>(
+            gpuData.d_outSplats,
+            gpuData.d_splatOffsets,
+            gpuData.d_tileSplats,
+            vertexCount,
+            tileSize,
+            tilesInX,
+            tilesInY
+        );
+        // Sort by tileID then depth
+        sortTileSplats(gpuData, totalTileSplats);
+
+        generateTileRanges(
+            gpuData.d_tileSplats,
+            totalTiles,
+            tileSize,
+            totalTileSplats,
+            gpuData.d_tileRangeStart,
+            gpuData.d_tileRangeEnd
+        );
 
         // Render
         dim3 blocks(totalTiles, 1, 1);
         dim3 threads(tileSize * tileSize, 1, 1);
-        tiledBlendingKernel_small<<<blocks, threads>>>(
-            d_outSplats, d_image, d_tileRangeStart, d_tileRangeEnd,
+        tiledBlendingKernel<<<blocks, threads>>>(
+            gpuData.d_tileSplats, gpuData.d_image, gpuData.d_tileRangeStart, gpuData.d_tileRangeEnd,
             camera, tileSize
         );
         cudaDeviceSynchronize();
 
         // Copy result back and update texture
         std::vector<float4> h_image(camera.imageWidth * camera.imageHeight);
-        cudaMemcpy(h_image.data(), d_image, camera.imageWidth * camera.imageHeight * sizeof(float4), cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_image.data(), gpuData.d_image, camera.imageWidth * camera.imageHeight * sizeof(float4), cudaMemcpyDeviceToHost);
 
         std::vector<Uint32> pixels(camera.imageWidth * camera.imageHeight);
         for (int i = 0; i < camera.imageWidth * camera.imageHeight; i++) {
@@ -159,17 +179,12 @@ int main() {
             pixels[i] = (r << 0) | (g << 8) | (b << 16) | (a << 24); 
         }
 
-        app.renderFrame(pixels, fpsCounter, camera);
+        app.renderFrame(pixels, camera);
+
+        cudaFree(gpuData.d_tileSplats);
     }
 
-    // Cleanup
-    cudaFree(d_splats);
-    cudaFree(d_outSplats);
-    cudaFree(d_vertices);
-    cudaFree(d_image);
-    cudaFree(d_tileRangeStart);
-    cudaFree(d_tileRangeEnd);
-    cudaFree(d_originalVertices);
+    releaseGPUData(gpuData);
 
     return 0;
 }
