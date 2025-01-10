@@ -58,7 +58,7 @@ int read_init_ply(std::vector<float3>& originalVertices,
 
     for (int i = 0; i < vertexCount; i++) {
         h_splats[i].position = originalVertices[i];
-        h_splats[i].scale = make_float3(0.1f, 0.1f, 0.1f);
+        h_splats[i].scale = make_float3(0.9f, 0.9f, 0.9f);
         h_splats[i].opacity = 1.0f;
         // Read the colors from the original data
         h_splats[i].color = make_float3(
