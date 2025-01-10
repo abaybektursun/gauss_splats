@@ -127,7 +127,7 @@ int main()
         cudaMalloc(&d_outSplats, vertexCount*sizeof(ProjectedSplat));
         int blockSize = 256;
         int gridSize  = (vertexCount + blockSize - 1) / blockSize;
-        projectGaussiansKernel<<<gridSize, blockSize>>>(
+        projectGaussiansKernel_small<<<gridSize, blockSize>>>(
             d_splats, d_outSplats, vertexCount, camera, 16
         );
         cudaDeviceSynchronize();
@@ -191,7 +191,7 @@ int main()
     std::vector<int> h_tileRangeStart(totalTiles, -1);
     std::vector<int> h_tileRangeEnd  (totalTiles, -1);
     measureTime("computeTileRanges", [&] {
-        computeTileRanges(h_splatsSorted, totalTiles,
+        computeTileRanges_small(h_splatsSorted, totalTiles,
                         h_tileRangeStart, h_tileRangeEnd);
     });
 
@@ -215,7 +215,7 @@ int main()
     dim3 blocks(totalTiles, 1, 1);
     dim3 threads(tileSize*tileSize, 1, 1);
     measureTime("Tiled blending kernel", [&] {
-        tiledBlendingKernel<<<blocks, threads>>>(
+        tiledBlendingKernel_small<<<blocks, threads>>>(
             d_outSplats, d_image, d_tileRangeStart, d_tileRangeEnd,
             camera, tileSize
         );

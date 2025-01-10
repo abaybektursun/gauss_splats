@@ -112,7 +112,7 @@ int main() {
         // Project Gaussians
         int blockSize = tileSize*tileSize;
         int gridSize = (vertexCount + blockSize - 1) / blockSize;
-        projectGaussiansKernel<<<gridSize, blockSize>>>(
+        projectGaussiansKernel_small<<<gridSize, blockSize>>>(
             d_splats, d_outSplats, vertexCount, camera, tileSize
         );
         cudaDeviceSynchronize();
@@ -131,12 +131,12 @@ int main() {
         thrust::device_ptr<ProjectedSplat> d_splats_ptr(d_outSplats);
         thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
 
-        generateTileRanges(d_outSplats, totalTiles, tileSize, vertexCount, d_tileRangeStart, d_tileRangeEnd);
+        generateTileRanges_small(d_outSplats, totalTiles, tileSize, vertexCount, d_tileRangeStart, d_tileRangeEnd);
 
         // Render
         dim3 blocks(totalTiles, 1, 1);
         dim3 threads(tileSize * tileSize, 1, 1);
-        tiledBlendingKernel<<<blocks, threads>>>(
+        tiledBlendingKernel_small<<<blocks, threads>>>(
             d_outSplats, d_image, d_tileRangeStart, d_tileRangeEnd,
             camera, tileSize
         );

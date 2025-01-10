@@ -168,7 +168,7 @@ __device__ void computeSplatBoundingBox(
  * Kernel: project 3D Gaussians to 2D splats.
  */
 __global__
-void projectGaussiansKernel(const Gaussian3D* d_gaussians,
+void projectGaussiansKernel_small(const Gaussian3D* d_gaussians,
                             ProjectedSplat* d_outSplats,
                             int numGaussians,
                             OrthoCameraParams cam,
@@ -290,7 +290,7 @@ void alphaBlend(float4& dest, const float4& src)
  * Kernel: for each tile (block), blend all its splats in thread order.
  */
 __global__
-void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
+void tiledBlendingKernel_small(const ProjectedSplat* d_inSplats,
                          float4*               d_outImage,
                          const int*            d_tileRangeStart,
                          const int*            d_tileRangeEnd,
@@ -411,7 +411,7 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
  * CPU utility: compute tileRangeStart / tileRangeEnd from sorted splats on the host.
  */
 
-void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
+void computeTileRanges_small(std::vector<ProjectedSplat>& h_sortedSplats,
                        int totalTiles,
                        std::vector<int>& tileRangeStart,
                        std::vector<int>& tileRangeEnd)
@@ -514,7 +514,7 @@ void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin
 }
 
 
-void generateTileRanges(
+void generateTileRanges_small(
     const ProjectedSplat* d_outSplats,
     int totalTiles,
     int tileSize,

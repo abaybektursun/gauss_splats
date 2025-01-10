@@ -73,6 +73,19 @@ struct ProjectedSplat {
     Gaussian3D* gaussian;  // Pointer to the original Gaussian
 };
 
+struct ProjectedGaussian {
+    bool invalid=false;      // True if the splat is not visible
+    float depth;       // z-value for sorting
+    int pixelX;        // Final 2D pixel coordinate (u)
+    int pixelY;        // Final 2D pixel coordinate (v)
+    float2x2 sigma2D;  // Screen-space covariance matrix
+    // These are not camera min and max, but the bounding box of the splat
+    int2 bboxMin;      // Bounding box min (u_min, v_min)
+    int2 bboxMax;      // Bounding box max (u_max, v_max)
+    Gaussian3D* gaussian;  // Pointer to the original Gaussian
+};
+
+
 /**
  * @brief GPU kernel to project 3D Gaussians into 2D splats.
  *
@@ -83,7 +96,7 @@ struct ProjectedSplat {
  * @param tile_size      Side length in pixels of each tile.
  */
 __global__
-void projectGaussiansKernel(const Gaussian3D* d_gaussians,
+void projectGaussiansKernel_small(const Gaussian3D* d_gaussians,
                             ProjectedSplat* d_outSplats,
                             int numGaussians,
                             OrthoCameraParams cam,
@@ -99,7 +112,7 @@ void alphaBlend(float4& dest, const float4& src);
  * @brief GPU kernel to blend splats tile-by-tile.
  */
 __global__
-void tiledBlendingKernel(const ProjectedSplat*  d_inSplats,
+void tiledBlendingKernel_small(const ProjectedSplat*  d_inSplats,
                          float4*               d_outImage,
                          const int*            d_tileRangeStart,
                          const int*            d_tileRangeEnd,
@@ -109,7 +122,7 @@ void tiledBlendingKernel(const ProjectedSplat*  d_inSplats,
 /**
  * @brief CPU function to compute per-tile start/end indices after sorting splats.
  */
-void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
+void computeTileRanges_small(std::vector<ProjectedSplat>& h_sortedSplats,
                        int totalTiles,
                        std::vector<int>& tileRangeStart,
                        std::vector<int>& tileRangeEnd);
@@ -133,7 +146,7 @@ void scatterTileRanges(const int* uniqueTileIDs,
  */
 void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin, const float3& sceneMax);
 
-void generateTileRanges(
+void generateTileRanges_small(
     const ProjectedSplat* d_outSplats,
     int totalTiles,
     int tileSize,
