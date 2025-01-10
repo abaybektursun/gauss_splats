@@ -2,6 +2,7 @@
 #include <device_launch_parameters.h>
 #include <cmath>
 #include <gaussian.hpp>
+#include <stdio.h>
 
 // Simple struct to hold rotation angles
 struct RotationParams {
@@ -93,5 +94,13 @@ void rotateVerticesOnGPU(float3* d_inVertices,
                                                   numVertices,
                                                   d_splats,
                                                   params);
-    cudaDeviceSynchronize(); // or check errors
+    // TODO: logically veryfiy we need to sync. So far works without it.
+    // Though, to me it seems like we should sync here, cause previous kernel is writing 
+    //cudaDeviceSynchronize();
+
+    // check errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Failed to launch kernel: %s\n", cudaGetErrorString(err));
+    }
 }

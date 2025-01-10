@@ -156,7 +156,7 @@ int main()
     // Sort by tileID then by depth (as 64-bit key)
     thrust::device_vector<unsigned long long> d_keys(vertexCount);
     measureTime("Sort splats", [&] {
-        // Transform each ProjectedSplat into a 64-bit key for sorting:
+        // Transform each ProjectedGaussian_small into a 64-bit key for sorting:
         thrust::transform(
             thrust::device_pointer_cast(d_outSplats),
             thrust::device_pointer_cast(d_outSplats + vertexCount),

@@ -1,11 +1,13 @@
 #pragma once
 
+#include <iostream>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include "gaussian.hpp"
 #include "camera.hpp"
 #include <vector> 
 #include <cmath>
+
 
 /**
  * @brief Converts a positive float to its raw 32-bit representation.
@@ -52,7 +54,6 @@ __device__ inline unsigned long long packTileDepth(int tileID, float depth)
     return (tilePart | depthPart);
 }
 
-
 struct float2x2 {
     float2 row1;
     float2 row2;
@@ -86,11 +87,35 @@ struct ProjectedGaussian {
 };
 
 
+struct TileSplat {
+    int   tileID;
+    float depth;
+    float2x2 sigma2D;
+    int2  bboxMin, bboxMax;  
+    int   pixelX, pixelY;
+    Gaussian3D* gaussPtr;
+};
+
+struct GPUData {
+    float4* d_image = nullptr;
+    Gaussian3D* d_splats = nullptr;
+    ProjectedGaussian* d_outSplats = nullptr;
+    float3* d_vertices = nullptr;
+    float3* d_originalVertices = nullptr;
+    int* d_tileRangeStart = nullptr;
+    int* d_tileRangeEnd = nullptr;
+    int* d_splatCounts = nullptr;
+    int* d_splatOffsets = nullptr;
+    TileSplat* d_tileSplats = nullptr;
+};
+
+
+void releaseGPUData(GPUData& data);
 /**
  * @brief GPU kernel to project 3D Gaussians into 2D splats.
  *
  * @param d_gaussians    Device pointer to array of Gaussian3D.
- * @param d_outSplats    Device pointer to an output array of ProjectedSplat.
+ * @param d_outSplats    Device pointer to an output array of ProjectedGaussian_small.
  * @param numGaussians   Number of Gaussians in the array.
  * @param cam            Camera parameters (orthographic).
  * @param tile_size      Side length in pixels of each tile.
@@ -137,14 +162,6 @@ void tiledBlendingKernel(const TileSplat*      d_tileSplats,
                          OrthoCameraParams     cam,
                          int                   tile_size);
 
-/**
- * @brief CPU function to compute per-tile start/end indices after sorting splats.
- */
-void computeTileRanges_small(std::vector<ProjectedGaussian_small>& h_sortedSplats,
-                       int totalTiles,
-                       std::vector<int>& tileRangeStart,
-                       std::vector<int>& tileRangeEnd);
-
 
 __global__
 void scatterTileRanges(const int* uniqueTileIDs,
@@ -169,9 +186,10 @@ void generateTileRanges_small(
     const ProjectedGaussian_small* d_outSplats,
     int totalTiles,
     int tileSize,
-    int vertexCount,
+    int totalTileSplats,
     int* d_tileRangeStart,
     int* d_tileRangeEnd);
+
 
 void generateTileRanges(
     const TileSplat* d_tileSplats,
@@ -181,3 +199,22 @@ void generateTileRanges(
     int* d_tileRangeStart,
     int* d_tileRangeEnd
 );
+
+
+void sortTileSplats(const GPUData& gpuData, int vertexCount);
+__global__
+void countTilesKernel(const ProjectedGaussian* d_splats,
+                      int vertexCount,
+                      int tileSize,
+                      int tilesInX,
+                      int tilesInY,
+                      int* d_splatCounts);
+                      
+__global__
+void expandTilesKernel(const ProjectedGaussian* d_splats,
+                      int* d_splatOffsets,
+                      TileSplat* d_tileSplats,
+                      int vertexCount,
+                      int tileSize,
+                      int tilesInX,
+                      int tilesInY);
