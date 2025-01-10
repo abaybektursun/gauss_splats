@@ -14,8 +14,8 @@
 #include "ply_utils.cu"
 #include "sdl_utils.cu"
 
-const short WINDOW_WIDTH = 512*1.5;
-const short WINDOW_HEIGHT = 512*1.5;
+const short WINDOW_WIDTH = 512*2.0;
+const short WINDOW_HEIGHT = 512*2.0;
 
 int main() {
     SDLApp app(WINDOW_WIDTH, WINDOW_HEIGHT);
@@ -28,7 +28,7 @@ int main() {
     std::vector<float3> originalColors;
     int vertexCount = 0;
     std::vector<Gaussian3D> h_splats(0); // Will be resized in read_init_ply
-    read_init_ply(originalVertices, vertexCount, originalColors, h_splats, 0.99);
+    read_init_ply(originalVertices, vertexCount, originalColors, h_splats, 0.995);
     
     BoundingSphere boundingSphere = calculateBoundingSphere(originalVertices);
     OrthoCameraParams camera;
