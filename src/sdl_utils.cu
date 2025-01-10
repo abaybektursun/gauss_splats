@@ -176,7 +176,6 @@ public:
 
     // Call this once per frame to update the texture and present
     void renderFrame(std::vector<Uint32>& pixels, 
-                     FPSCounter& fpsCounter, 
                      const OrthoCameraParams& camera)
     {
         // Update the texture with the latest pixel buffer
@@ -189,7 +188,7 @@ public:
         SDL_RenderPresent(m_renderer);
 
         // Update FPS
-        fpsCounter.update();
+        m_fpsCounter.update();
     }
 
 private:
@@ -198,5 +197,6 @@ private:
     SDL_Window*    m_window       = nullptr;
     SDL_Renderer*  m_renderer     = nullptr;
     SDL_Texture*   m_texture      = nullptr;
+    FPSCounter     m_fpsCounter;
 };
 
