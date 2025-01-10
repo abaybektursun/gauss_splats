@@ -70,7 +70,7 @@ int main() {
     cudaMalloc(&gpuData.d_tileRangeStart, totalTiles * sizeof(int));
     cudaMalloc(&gpuData.d_tileRangeEnd, totalTiles * sizeof(int));
     cudaMalloc(&gpuData.d_image, camera.imageWidth * camera.imageHeight * sizeof(float4));
-    cudaMalloc(&gpuData.d_outSplats, vertexCount * sizeof(ProjectedSplat));
+    cudaMalloc(&gpuData.d_outSplats, vertexCount * sizeof(ProjectedGaussian));
     cudaMalloc(&gpuData.d_vertices, vertexCount * sizeof(float3));
     cudaMemcpy(gpuData.d_vertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
 
@@ -80,6 +80,8 @@ int main() {
     cudaMalloc(&gpuData.d_splats, vertexCount * sizeof(Gaussian3D));
     cudaMemcpy(gpuData.d_splats, h_splats.data(), vertexCount * sizeof(Gaussian3D), cudaMemcpyHostToDevice);
 
+    cudaMalloc(&gpuData.d_splatCounts, vertexCount * sizeof(int));
+    cudaMalloc(&gpuData.d_splatOffsets, vertexCount * sizeof(int));
 
     SDL_Event event;
     bool running = true;
@@ -103,16 +105,59 @@ int main() {
         );
         cudaDeviceSynchronize();
 
-        // Sort by tileID then depth
-        sortSplats(gpuData, vertexCount);
+        // Count how many tiles each splat covers
+        countTilesKernel<<<gridSize, blockSize>>>(gpuData.d_outSplats, vertexCount, tileSize, tilesInX, tilesInY, gpuData.d_splatCounts);
 
-        generateTileRanges(gpuData.d_outSplats, totalTiles, tileSize, vertexCount, gpuData.d_tileRangeStart, gpuData.d_tileRangeEnd);
+        // Prefix Sum of d_splatCounts into d_splatOffsets (exclisuve scan)
+        thrust::device_ptr<int> d_splatCounts_ptr(gpuData.d_splatCounts);
+        thrust::device_ptr<int> d_splatOffsets_ptr(gpuData.d_splatOffsets);
+        thrust::exclusive_scan(d_splatCounts_ptr, d_splatCounts_ptr + vertexCount, d_splatOffsets_ptr);
+
+        // We copy that integer from device memory to host memory:
+        int lastOffset, lastCount;
+        cudaMemcpy(
+            &lastOffset,  // destination in host memory
+            thrust::raw_pointer_cast(d_splatOffsets_ptr + (vertexCount - 1)),
+            sizeof(int),
+            cudaMemcpyDeviceToHost
+        );
+        cudaMemcpy(
+            &lastCount,  // destination in host memory
+            thrust::raw_pointer_cast(d_splatCounts_ptr + (vertexCount - 1)),
+            sizeof(int),
+            cudaMemcpyDeviceToHost
+        );
+
+        // Allocate GPU array d_tileSplats of size totalTileSplats.
+        int totalTileSplats = lastCount + lastOffset;
+        cudaMalloc(&gpuData.d_tileSplats, totalTileSplats * sizeof(TileSplat));
+
+        expandTilesKernel<<<gridSize, blockSize>>>(
+            gpuData.d_outSplats,
+            gpuData.d_splatOffsets,
+            gpuData.d_tileSplats,
+            vertexCount,
+            tileSize,
+            tilesInX,
+            tilesInY
+        );
+        // Sort by tileID then depth
+        sortTileSplats(gpuData, totalTileSplats);
+
+        generateTileRanges(
+            gpuData.d_tileSplats,
+            totalTiles,
+            tileSize,
+            totalTileSplats,
+            gpuData.d_tileRangeStart,
+            gpuData.d_tileRangeEnd
+        );
 
         // Render
         dim3 blocks(totalTiles, 1, 1);
         dim3 threads(tileSize * tileSize, 1, 1);
         tiledBlendingKernel<<<blocks, threads>>>(
-            gpuData.d_outSplats, gpuData.d_image, gpuData.d_tileRangeStart, gpuData.d_tileRangeEnd,
+            gpuData.d_tileSplats, gpuData.d_image, gpuData.d_tileRangeStart, gpuData.d_tileRangeEnd,
             camera, tileSize
         );
         cudaDeviceSynchronize();
@@ -135,6 +180,8 @@ int main() {
         }
 
         app.renderFrame(pixels, camera);
+
+        cudaFree(gpuData.d_tileSplats);
     }
 
     releaseGPUData(gpuData);

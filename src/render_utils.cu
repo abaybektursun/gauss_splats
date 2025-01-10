@@ -16,6 +16,9 @@ void releaseGPUData(GPUData& data) {
     cudaFree(data.d_originalVertices);
     cudaFree(data.d_tileRangeStart);
     cudaFree(data.d_tileRangeEnd);
+    cudaFree(data.d_splatCounts);
+    cudaFree(data.d_splatOffsets);
+    cudaFree(data.d_tileSplats);
     std::cout << "\n";
 }
 
@@ -181,7 +184,7 @@ __device__ void computeSplatBoundingBox(
  */
 __global__
 void projectGaussiansKernel(const Gaussian3D* d_gaussians,
-                            ProjectedSplat* d_outSplats,
+                            ProjectedGaussian* d_outSplats,
                             int numGaussians,
                             OrthoCameraParams cam,
                             int tile_size)
@@ -252,10 +255,13 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
     int u, v;
     orthographicProject(x, y, cam, u, v);
 
+    // Check if the projected point is outside the image
     if (u < 0 || u >= cam.imageWidth ||
         v < 0 || v >= cam.imageHeight)
     {
-        d_outSplats[idx].tileID = -1;
+        // TODO: update the renderer to handle invalid splats
+        //d_outSplats[idx].tileID = -1;
+        d_outSplats[idx].invalid = true;
         return;
     }
 
@@ -264,7 +270,7 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
     int tileY  = v / tile_size;
     int tileID = tileY * (cam.imageWidth / tile_size) + tileX;
 
-    d_outSplats[idx].tileID  = tileID;
+    //d_outSplats[idx].tileID  = tileID;
     d_outSplats[idx].depth   = z;
     d_outSplats[idx].pixelX  = u;
     d_outSplats[idx].pixelY  = v;
@@ -302,7 +308,7 @@ void alphaBlend(float4& dest, const float4& src)
  * Kernel: for each tile (block), blend all its splats in thread order.
  */
 __global__
-void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
+void tiledBlendingKernel(const TileSplat*      d_tileSplats,
                          float4*               d_outImage,
                          const int*            d_tileRangeStart,
                          const int*            d_tileRangeEnd,
@@ -353,8 +359,8 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
 
     // Loop over splats in this tile
     for (int i = start; i < end; i++) {
-        ProjectedSplat s = d_inSplats[i];
-        Gaussian3D* gPtr = s.gaussian;
+        TileSplat s = d_tileSplats[i];
+        Gaussian3D* gPtr = s.gaussPtr;
         if (gPtr == nullptr) {
             printf("Thread (%d): gPtr is nullptr\\n", threadIdx.x);
             continue;
@@ -423,7 +429,7 @@ void tiledBlendingKernel(const ProjectedSplat* d_inSplats,
  * CPU utility: compute tileRangeStart / tileRangeEnd from sorted splats on the host.
  */
 
-void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
+void computeTileRanges(std::vector<TileSplat>& h_sortedSplats,
                        int totalTiles,
                        std::vector<int>& tileRangeStart,
                        std::vector<int>& tileRangeEnd)
@@ -527,10 +533,10 @@ void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin
 
 
 void generateTileRanges(
-    const ProjectedSplat* d_outSplats,
+    const TileSplat* d_tileSplats,
     int totalTiles,
     int tileSize,
-    int vertexCount,
+    int totalTileSplats,
     int* d_tileRangeStart,
     int* d_tileRangeEnd)
 {
@@ -541,24 +547,24 @@ void generateTileRanges(
         thrust::fill(d_endPtr,   d_endPtr + totalTiles,   -1);
 
         // 2) Create an array of indices [0, 1, 2, ...] for the splats
-        thrust::device_vector<int> d_indices(vertexCount);
+        thrust::device_vector<int> d_indices(totalTileSplats);
         thrust::sequence(d_indices.begin(), d_indices.end());
 
         // 3) Extract tileIDs from the sorted splats
-        thrust::device_vector<int> d_tileIDs(vertexCount);
+        thrust::device_vector<int> d_tileIDs(totalTileSplats);
         thrust::transform(
-            thrust::device_pointer_cast(d_outSplats),
-            thrust::device_pointer_cast(d_outSplats + vertexCount),
+            thrust::device_pointer_cast(d_tileSplats),
+            thrust::device_pointer_cast(d_tileSplats + totalTileSplats),
             d_tileIDs.begin(),
-            [] __device__ (const ProjectedSplat &s) {
+            [] __device__ (const TileSplat &s) {
                 return s.tileID;
             }
         );
 
         // 4) reduce_by_key for min and max indices
-        thrust::device_vector<int> d_tileIDsOut(vertexCount);
-        thrust::device_vector<int> d_tileStartsOut(vertexCount);
-        thrust::device_vector<int> d_tileEndsOut(vertexCount);
+        thrust::device_vector<int> d_tileIDsOut(totalTileSplats);
+        thrust::device_vector<int> d_tileStartsOut(totalTileSplats);
+        thrust::device_vector<int> d_tileEndsOut(totalTileSplats);
 
         // (a) find the FIRST index for each tile
         auto min_end = thrust::reduce_by_key(
@@ -601,16 +607,108 @@ void generateTileRanges(
         }
 }
 
-void sortSplats(const GPUData& gpuData, int vertexCount){
-        thrust::device_vector<unsigned long long> d_keys(vertexCount);
+// Sort d_tileSplats by tileID and depth
+void sortTileSplats(const GPUData& gpuData, int totalTileSplats){
+        thrust::device_vector<unsigned long long> d_keys(totalTileSplats);
         thrust::transform(
-            thrust::device_pointer_cast(gpuData.d_outSplats),
-            thrust::device_pointer_cast(gpuData.d_outSplats + vertexCount),
+            thrust::device_pointer_cast(gpuData.d_tileSplats),
+            thrust::device_pointer_cast(gpuData.d_tileSplats + totalTileSplats),
             d_keys.begin(),
-            [] __device__ (const ProjectedSplat& s) {
+            [] __device__ (const TileSplat& s) {
                 return packTileDepth(s.tileID, s.depth);
             }
         );
-        thrust::device_ptr<ProjectedSplat> d_splats_ptr(gpuData.d_outSplats);
+        thrust::device_ptr<TileSplat> d_splats_ptr(gpuData.d_tileSplats);
         thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
+}
+
+__global__
+void countTilesKernel(const ProjectedGaussian* d_splats,
+                      int vertexCount,
+                      int tileSize,
+                      int tilesInX,
+                      int tilesInY,
+                      int* d_splatCounts)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= vertexCount) return;
+    
+    // 1) Read one ProjectedGaussian from the array
+    ProjectedGaussian s = d_splats[idx];
+    
+    // 2) Convert pixel-space bounding box to tile indices
+    //    e.g. if bboxMin.x=50 and tileSize=16 => tileMinX=3
+    int tileMinX = s.bboxMin.x / tileSize;
+    int tileMaxX = s.bboxMax.x / tileSize;
+    int tileMinY = s.bboxMin.y / tileSize;
+    int tileMaxY = s.bboxMax.y / tileSize;
+
+    // 3) Clamp tile indices so they don’t go out of [0..tilesInX-1], [0..tilesInY-1]
+    tileMinX = max(0, tileMinX);
+    tileMaxX = min(tileMaxX, tilesInX - 1);
+    tileMinY = max(0, tileMinY);
+    tileMaxY = min(tileMaxY, tilesInY - 1);
+
+    // 4) Count how many tiles this splat covers
+    //    e.g. if tileMinX=3 and tileMaxX=4 => coverage in X is (4-3+1)=2 tiles
+    //    similarly for Y, then multiply X coverage * Y coverage
+    int count = (tileMaxX - tileMinX + 1) * (tileMaxY - tileMinY + 1);
+
+    // 5) Write that count to the d_splatCounts array.
+    d_splatCounts[idx] = count;
+}
+
+
+__global__
+void expandTilesKernel(const ProjectedGaussian* d_splats,
+                      int* d_splatOffsets,
+                      TileSplat* d_tileSplats,
+                      int vertexCount,
+                      int tileSize,
+                      int tilesInX,
+                      int tilesInY)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= vertexCount) return;
+    
+    // 1) Read one ProjectedGaussian from the array
+    ProjectedGaussian s = d_splats[idx];
+    
+    // 2) Convert pixel-space bounding box to tile indices
+    //    e.g. if bboxMin.x=50 and tileSize=16 => tileMinX=3
+    int tileMinX = s.bboxMin.x / tileSize;
+    int tileMaxX = s.bboxMax.x / tileSize;
+    int tileMinY = s.bboxMin.y / tileSize;
+    int tileMaxY = s.bboxMax.y / tileSize;
+
+    // 3) Clamp tile indices so they don’t go out of [0..tilesInX-1], [0..tilesInY-1]
+    tileMinX = max(0, tileMinX);
+    tileMaxX = min(tileMaxX, tilesInX - 1);
+    tileMinY = max(0, tileMinY);
+    tileMaxY = min(tileMaxY, tilesInY - 1);
+
+    int start = d_splatOffsets[idx];
+    
+    int localIndex = 0;
+    for (int ty = tileMinY; ty <= tileMaxY; ty++) {
+        for (int tx = tileMinX; tx <= tileMaxX; tx++) {
+            int tileID = ty * tilesInX + tx;
+            // fill one TileSplat entry
+            TileSplat spl;
+            spl.tileID = tileID;
+            spl.depth    = d_splats[idx].depth;
+            spl.sigma2D  = d_splats[idx].sigma2D;
+            spl.pixelX   = d_splats[idx].pixelX;
+            spl.pixelY   = d_splats[idx].pixelY;
+            spl.bboxMin  = d_splats[idx].bboxMin;  // or tile-clipped
+            spl.bboxMax  = d_splats[idx].bboxMax;
+            spl.gaussPtr = d_splats[idx].gaussian;
+
+            // write to d_tileSplats[start + localIndex];
+            // localIndex increments from 0..(count-1)
+            d_tileSplats[start + localIndex] = spl;
+            localIndex++;
+        }
+    }
+
 }

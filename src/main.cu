@@ -122,9 +122,9 @@ int main()
     });
 
     // Project Gaussians
-    ProjectedSplat* d_outSplats = nullptr;
+    ProjectedGaussian* d_outSplats = nullptr;
     measureTime("Project Gaussians", [&] {
-        cudaMalloc(&d_outSplats, vertexCount*sizeof(ProjectedSplat));
+        cudaMalloc(&d_outSplats, vertexCount*sizeof(ProjectedGaussian));
         int blockSize = 256;
         int gridSize  = (vertexCount + blockSize - 1) / blockSize;
         projectGaussiansKernel<<<gridSize, blockSize>>>(
@@ -135,8 +135,8 @@ int main()
 
     // DEBUG: Save the projected splats to a text file
     std::ofstream ofs_splat("splats.txt");
-    std::vector<ProjectedSplat> h_splats_debug(vertexCount);
-    cudaMemcpy(h_splats_debug.data(), d_outSplats, vertexCount*sizeof(ProjectedSplat), cudaMemcpyDeviceToHost);
+    std::vector<ProjectedGaussian> h_splats_debug(vertexCount);
+    cudaMemcpy(h_splats_debug.data(), d_outSplats, vertexCount*sizeof(ProjectedGaussian), cudaMemcpyDeviceToHost);
     for (int i = 0; i < vertexCount; i++) {
         ofs_splat << h_splats_debug[i].tileID << " "
             << h_splats_debug[i].depth << " "
@@ -161,7 +161,7 @@ int main()
             thrust::device_pointer_cast(d_outSplats),
             thrust::device_pointer_cast(d_outSplats + vertexCount),
             d_keys.begin(),
-            [] __device__ (const ProjectedSplat& s)
+            [] __device__ (const ProjectedGaussian& s)
             {
                 // tileID in high bits, depth in low bits
                 // so that we sort primarily by tileID, and secondarily by depth
@@ -172,13 +172,13 @@ int main()
 
     
     // Now sort by the keys:
-    thrust::device_ptr<ProjectedSplat> d_splats_ptr(d_outSplats);
+    thrust::device_ptr<ProjectedGaussian> d_splats_ptr(d_outSplats);
     thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
 
     // Copy sorted splats back to host
-    std::vector<ProjectedSplat> h_splatsSorted(vertexCount);
+    std::vector<ProjectedGaussian> h_splatsSorted(vertexCount);
     cudaMemcpy(h_splatsSorted.data(), d_outSplats,
-               vertexCount*sizeof(ProjectedSplat),
+               vertexCount*sizeof(ProjectedGaussian),
                cudaMemcpyDeviceToHost);
 
 
@@ -207,7 +207,7 @@ int main()
 
         // Copy sorted splats array to device
         cudaMemcpy(d_outSplats, h_splatsSorted.data(),
-                vertexCount*sizeof(ProjectedSplat),
+                vertexCount*sizeof(ProjectedGaussian),
                 cudaMemcpyHostToDevice);
     });
 

@@ -54,7 +54,6 @@ __device__ inline unsigned long long packTileDepth(int tileID, float depth)
     return (tilePart | depthPart);
 }
 
-
 struct float2x2 {
     float2 row1;
     float2 row2;
@@ -63,8 +62,9 @@ struct float2x2 {
 /**
  * @brief Holds the result of projecting a Gaussian into 2D.
  */
-struct ProjectedSplat {
-    int tileID;        // Which tile in tile-based raster
+struct ProjectedGaussian {
+    //int tileID;      // Which tile in tile-based raster
+    bool invalid=false;      // True if the splat is not visible
     float depth;       // z-value for sorting
     int pixelX;        // Final 2D pixel coordinate (u)
     int pixelY;        // Final 2D pixel coordinate (v)
@@ -75,15 +75,28 @@ struct ProjectedSplat {
     Gaussian3D* gaussian;  // Pointer to the original Gaussian
 };
 
+struct TileSplat {
+    int   tileID;
+    float depth;
+    float2x2 sigma2D;
+    int2  bboxMin, bboxMax;  
+    int   pixelX, pixelY;
+    Gaussian3D* gaussPtr;
+};
+
 struct GPUData {
     float4* d_image = nullptr;
     Gaussian3D* d_splats = nullptr;
-    ProjectedSplat* d_outSplats = nullptr;
+    ProjectedGaussian* d_outSplats = nullptr;
     float3* d_vertices = nullptr;
     float3* d_originalVertices = nullptr;
     int* d_tileRangeStart = nullptr;
     int* d_tileRangeEnd = nullptr;
+    int* d_splatCounts = nullptr;
+    int* d_splatOffsets = nullptr;
+    TileSplat* d_tileSplats = nullptr;
 };
+
 
 void releaseGPUData(GPUData& data);
 /**
@@ -97,7 +110,7 @@ void releaseGPUData(GPUData& data);
  */
 __global__
 void projectGaussiansKernel(const Gaussian3D* d_gaussians,
-                            ProjectedSplat* d_outSplats,
+                            ProjectedGaussian* d_outSplats,
                             int numGaussians,
                             OrthoCameraParams cam,
                             int tile_size = 16);
@@ -112,7 +125,7 @@ void alphaBlend(float4& dest, const float4& src);
  * @brief GPU kernel to blend splats tile-by-tile.
  */
 __global__
-void tiledBlendingKernel(const ProjectedSplat*  d_inSplats,
+void tiledBlendingKernel(const TileSplat*      d_tileSplats,
                          float4*               d_outImage,
                          const int*            d_tileRangeStart,
                          const int*            d_tileRangeEnd,
@@ -122,7 +135,7 @@ void tiledBlendingKernel(const ProjectedSplat*  d_inSplats,
 /**
  * @brief CPU function to compute per-tile start/end indices after sorting splats.
  */
-void computeTileRanges(std::vector<ProjectedSplat>& h_sortedSplats,
+void computeTileRanges(std::vector<TileSplat>& h_sortedSplats,
                        int totalTiles,
                        std::vector<int>& tileRangeStart,
                        std::vector<int>& tileRangeEnd);
@@ -147,13 +160,29 @@ void scatterTileRanges(const int* uniqueTileIDs,
 void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin, const float3& sceneMax);
 
 void generateTileRanges(
-    const ProjectedSplat* d_outSplats,
+    const TileSplat* d_tileSplats,
     int totalTiles,
     int tileSize,
-    int vertexCount,
+    int totalTileSplats,
     int* d_tileRangeStart,
     int* d_tileRangeEnd
 );
 
 
-void sortSplats(const GPUData& gpuData, int vertexCount);
+void sortTileSplats(const GPUData& gpuData, int vertexCount);
+__global__
+void countTilesKernel(const ProjectedGaussian* d_splats,
+                      int vertexCount,
+                      int tileSize,
+                      int tilesInX,
+                      int tilesInY,
+                      int* d_splatCounts);
+                      
+__global__
+void expandTilesKernel(const ProjectedGaussian* d_splats,
+                      int* d_splatOffsets,
+                      TileSplat* d_tileSplats,
+                      int vertexCount,
+                      int tileSize,
+                      int tilesInX,
+                      int tilesInY);
