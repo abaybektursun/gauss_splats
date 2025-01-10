@@ -7,6 +7,18 @@
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 
+
+void releaseGPUData(GPUData& data) {
+    cudaFree(data.d_image);
+    cudaFree(data.d_splats);
+    cudaFree(data.d_outSplats);
+    cudaFree(data.d_vertices);
+    cudaFree(data.d_originalVertices);
+    cudaFree(data.d_tileRangeStart);
+    cudaFree(data.d_tileRangeEnd);
+    std::cout << "\n";
+}
+
 /**
  * Device-side function to do orthographic projection.
  */
@@ -587,4 +599,18 @@ void generateTileRanges(
             );
             cudaDeviceSynchronize();
         }
+}
+
+void sortSplats(const GPUData& gpuData, int vertexCount){
+        thrust::device_vector<unsigned long long> d_keys(vertexCount);
+        thrust::transform(
+            thrust::device_pointer_cast(gpuData.d_outSplats),
+            thrust::device_pointer_cast(gpuData.d_outSplats + vertexCount),
+            d_keys.begin(),
+            [] __device__ (const ProjectedSplat& s) {
+                return packTileDepth(s.tileID, s.depth);
+            }
+        );
+        thrust::device_ptr<ProjectedSplat> d_splats_ptr(gpuData.d_outSplats);
+        thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
 }

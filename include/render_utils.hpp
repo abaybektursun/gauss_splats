@@ -1,11 +1,13 @@
 #pragma once
 
+#include <iostream>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include "gaussian.hpp"
 #include "camera.hpp"
 #include <vector> 
 #include <cmath>
+
 
 /**
  * @brief Converts a positive float to its raw 32-bit representation.
@@ -73,6 +75,17 @@ struct ProjectedSplat {
     Gaussian3D* gaussian;  // Pointer to the original Gaussian
 };
 
+struct GPUData {
+    float4* d_image = nullptr;
+    Gaussian3D* d_splats = nullptr;
+    ProjectedSplat* d_outSplats = nullptr;
+    float3* d_vertices = nullptr;
+    float3* d_originalVertices = nullptr;
+    int* d_tileRangeStart = nullptr;
+    int* d_tileRangeEnd = nullptr;
+};
+
+void releaseGPUData(GPUData& data);
 /**
  * @brief GPU kernel to project 3D Gaussians into 2D splats.
  *
@@ -139,4 +152,8 @@ void generateTileRanges(
     int tileSize,
     int vertexCount,
     int* d_tileRangeStart,
-    int* d_tileRangeEnd);
+    int* d_tileRangeEnd
+);
+
+
+void sortSplats(const GPUData& gpuData, int vertexCount);

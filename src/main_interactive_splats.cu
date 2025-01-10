@@ -17,27 +17,6 @@
 const short WINDOW_WIDTH = 512*1.5;
 const short WINDOW_HEIGHT = 512*1.5;
 
-struct GPUData {
-    float4* d_image = nullptr;
-    Gaussian3D* d_splats = nullptr;
-    ProjectedSplat* d_outSplats = nullptr;
-    float3* d_vertices = nullptr;
-    float3* d_originalVertices = nullptr;
-    int* d_tileRangeStart = nullptr;
-    int* d_tileRangeEnd = nullptr;
-};
-
-void releaseGPUData(GPUData& data) {
-    cudaFree(data.d_image);
-    cudaFree(data.d_splats);
-    cudaFree(data.d_outSplats);
-    cudaFree(data.d_vertices);
-    cudaFree(data.d_originalVertices);
-    cudaFree(data.d_tileRangeStart);
-    cudaFree(data.d_tileRangeEnd);
-    std::cout << "\n";
-}
-
 int main() {
     SDLApp app(WINDOW_WIDTH, WINDOW_HEIGHT);
     if (!app.init("Gaussian Splats Viewer")) {
@@ -125,17 +104,7 @@ int main() {
         cudaDeviceSynchronize();
 
         // Sort by tileID then depth
-        thrust::device_vector<unsigned long long> d_keys(vertexCount);
-        thrust::transform(
-            thrust::device_pointer_cast(gpuData.d_outSplats),
-            thrust::device_pointer_cast(gpuData.d_outSplats + vertexCount),
-            d_keys.begin(),
-            [] __device__ (const ProjectedSplat& s) {
-                return packTileDepth(s.tileID, s.depth);
-            }
-        );
-        thrust::device_ptr<ProjectedSplat> d_splats_ptr(gpuData.d_outSplats);
-        thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
+        sortSplats(gpuData, vertexCount);
 
         generateTileRanges(gpuData.d_outSplats, totalTiles, tileSize, vertexCount, gpuData.d_tileRangeStart, gpuData.d_tileRangeEnd);
 
