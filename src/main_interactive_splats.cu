@@ -28,7 +28,7 @@ int main() {
     std::vector<float3> originalColors;
     int vertexCount = 0;
     std::vector<Gaussian3D> h_splats(0); // Will be resized in read_init_ply
-    read_init_ply(originalVertices, vertexCount, originalColors, h_splats);
+    read_init_ply(originalVertices, vertexCount, originalColors, h_splats, 0.99);
     
     BoundingSphere boundingSphere = calculateBoundingSphere(originalVertices);
     OrthoCameraParams camera;
@@ -60,7 +60,7 @@ int main() {
     // Allocate CUDA resources
     GPUData gpuData;
 
-    const int tileSize = 8;
+    const int tileSize = 16;
     const int tilesInX = camera.imageWidth / tileSize;
     const int tilesInY = camera.imageHeight / tileSize;
     const int totalTiles = tilesInX * tilesInY;
