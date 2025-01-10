@@ -862,3 +862,111 @@ void generateTileRanges(
             cudaDeviceSynchronize();
         }
 }
+
+
+// Sort d_tileSplats by tileID and depth
+void sortTileSplats(const GPUData& gpuData, int totalTileSplats){
+        thrust::device_vector<unsigned long long> d_keys(totalTileSplats);
+        thrust::transform(
+            thrust::device_pointer_cast(gpuData.d_tileSplats),
+            thrust::device_pointer_cast(gpuData.d_tileSplats + totalTileSplats),
+            d_keys.begin(),
+            [] __device__ (const TileSplat& s) {
+                return packTileDepth(s.tileID, s.depth);
+            }
+        );
+        thrust::device_ptr<TileSplat> d_splats_ptr(gpuData.d_tileSplats);
+        thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
+}
+
+
+__global__
+void countTilesKernel(const ProjectedGaussian* d_splats,
+                      int vertexCount,
+                      int tileSize,
+                      int tilesInX,
+                      int tilesInY,
+                      int* d_splatCounts)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= vertexCount) return;
+    
+    // 1) Read one ProjectedGaussian from the array
+    ProjectedGaussian s = d_splats[idx];
+    
+    // 2) Convert pixel-space bounding box to tile indices
+    //    e.g. if bboxMin.x=50 and tileSize=16 => tileMinX=3
+    int tileMinX = s.bboxMin.x / tileSize;
+    int tileMaxX = s.bboxMax.x / tileSize;
+    int tileMinY = s.bboxMin.y / tileSize;
+    int tileMaxY = s.bboxMax.y / tileSize;
+
+    // 3) Clamp tile indices so they don’t go out of [0..tilesInX-1], [0..tilesInY-1]
+    tileMinX = max(0, tileMinX);
+    tileMaxX = min(tileMaxX, tilesInX - 1);
+    tileMinY = max(0, tileMinY);
+    tileMaxY = min(tileMaxY, tilesInY - 1);
+
+    // 4) Count how many tiles this splat covers
+    //    e.g. if tileMinX=3 and tileMaxX=4 => coverage in X is (4-3+1)=2 tiles
+    //    similarly for Y, then multiply X coverage * Y coverage
+    int count = (tileMaxX - tileMinX + 1) * (tileMaxY - tileMinY + 1);
+
+    // 5) Write that count to the d_splatCounts array.
+    d_splatCounts[idx] = count;
+}
+
+
+__global__
+void expandTilesKernel(const ProjectedGaussian* d_splats,
+                      int* d_splatOffsets,
+                      TileSplat* d_tileSplats,
+                      int vertexCount,
+                      int tileSize,
+                      int tilesInX,
+                      int tilesInY)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= vertexCount) return;
+    
+    // 1) Read one ProjectedGaussian from the array
+    ProjectedGaussian s = d_splats[idx];
+    
+    // 2) Convert pixel-space bounding box to tile indices
+    //    e.g. if bboxMin.x=50 and tileSize=16 => tileMinX=3
+    int tileMinX = s.bboxMin.x / tileSize;
+    int tileMaxX = s.bboxMax.x / tileSize;
+    int tileMinY = s.bboxMin.y / tileSize;
+    int tileMaxY = s.bboxMax.y / tileSize;
+
+    // 3) Clamp tile indices so they don’t go out of [0..tilesInX-1], [0..tilesInY-1]
+    tileMinX = max(0, tileMinX);
+    tileMaxX = min(tileMaxX, tilesInX - 1);
+    tileMinY = max(0, tileMinY);
+    tileMaxY = min(tileMaxY, tilesInY - 1);
+
+    int start = d_splatOffsets[idx];
+    
+    int localIndex = 0;
+    for (int ty = tileMinY; ty <= tileMaxY; ty++) {
+        for (int tx = tileMinX; tx <= tileMaxX; tx++) {
+            int tileID = ty * tilesInX + tx;
+            // fill one TileSplat entry
+            TileSplat spl;
+            spl.tileID = tileID;
+            spl.depth    = d_splats[idx].depth;
+            spl.sigma2D  = d_splats[idx].sigma2D;
+            spl.pixelX   = d_splats[idx].pixelX;
+            spl.pixelY   = d_splats[idx].pixelY;
+            spl.bboxMin  = d_splats[idx].bboxMin;  // or tile-clipped
+            spl.bboxMax  = d_splats[idx].bboxMax;
+            spl.gaussPtr = d_splats[idx].gaussian;
+
+            // write to d_tileSplats[start + localIndex];
+            // localIndex increments from 0..(count-1)
+            d_tileSplats[start + localIndex] = spl;
+            localIndex++;
+        }
+    }
+
+}
