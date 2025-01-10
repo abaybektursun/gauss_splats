@@ -169,7 +169,7 @@ __device__ void computeSplatBoundingBox(
  */
 __global__
 void projectGaussiansKernel_small(const Gaussian3D* d_gaussians,
-                            ProjectedSplat* d_outSplats,
+                            ProjectedGaussian_small* d_outSplats,
                             int numGaussians,
                             OrthoCameraParams cam,
                             int tile_size)
@@ -290,7 +290,7 @@ void alphaBlend(float4& dest, const float4& src)
  * Kernel: for each tile (block), blend all its splats in thread order.
  */
 __global__
-void tiledBlendingKernel_small(const ProjectedSplat* d_inSplats,
+void tiledBlendingKernel_small(const ProjectedGaussian_small* d_inSplats,
                          float4*               d_outImage,
                          const int*            d_tileRangeStart,
                          const int*            d_tileRangeEnd,
@@ -341,7 +341,7 @@ void tiledBlendingKernel_small(const ProjectedSplat* d_inSplats,
 
     // Loop over splats in this tile
     for (int i = start; i < end; i++) {
-        ProjectedSplat s = d_inSplats[i];
+        ProjectedGaussian_small s = d_inSplats[i];
         Gaussian3D* gPtr = s.gaussian;
         if (gPtr == nullptr) {
             printf("Thread (%d): gPtr is nullptr\\n", threadIdx.x);
@@ -411,7 +411,7 @@ void tiledBlendingKernel_small(const ProjectedSplat* d_inSplats,
  * CPU utility: compute tileRangeStart / tileRangeEnd from sorted splats on the host.
  */
 
-void computeTileRanges_small(std::vector<ProjectedSplat>& h_sortedSplats,
+void computeTileRanges_small(std::vector<ProjectedGaussian_small>& h_sortedSplats,
                        int totalTiles,
                        std::vector<int>& tileRangeStart,
                        std::vector<int>& tileRangeEnd)
@@ -515,7 +515,7 @@ void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin
 
 
 void generateTileRanges_small(
-    const ProjectedSplat* d_outSplats,
+    const ProjectedGaussian_small* d_outSplats,
     int totalTiles,
     int tileSize,
     int vertexCount,
@@ -538,7 +538,7 @@ void generateTileRanges_small(
             thrust::device_pointer_cast(d_outSplats),
             thrust::device_pointer_cast(d_outSplats + vertexCount),
             d_tileIDs.begin(),
-            [] __device__ (const ProjectedSplat &s) {
+            [] __device__ (const ProjectedGaussian_small &s) {
                 return s.tileID;
             }
         );

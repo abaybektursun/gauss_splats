@@ -64,12 +64,12 @@ int main() {
     // Allocate CUDA resources
     float4* d_image = nullptr;
     Gaussian3D* d_splats = nullptr;
-    ProjectedSplat* d_outSplats = nullptr;
+    ProjectedGaussian_small* d_outSplats = nullptr;
     float3* d_vertices = nullptr;
     
     cudaMalloc(&d_image, camera.imageWidth * camera.imageHeight * sizeof(float4));
     cudaMalloc(&d_splats, vertexCount * sizeof(Gaussian3D));
-    cudaMalloc(&d_outSplats, vertexCount * sizeof(ProjectedSplat));
+    cudaMalloc(&d_outSplats, vertexCount * sizeof(ProjectedGaussian_small));
     cudaMalloc(&d_vertices, vertexCount * sizeof(float3));
     cudaMemcpy(d_vertices, originalVertices.data(), vertexCount * sizeof(float3), cudaMemcpyHostToDevice);
     float3* d_originalVertices = nullptr;  // Add this with other GPU allocations
@@ -123,12 +123,12 @@ int main() {
             thrust::device_pointer_cast(d_outSplats),
             thrust::device_pointer_cast(d_outSplats + vertexCount),
             d_keys.begin(),
-            [] __device__ (const ProjectedSplat& s) {
+            [] __device__ (const ProjectedGaussian_small& s) {
                 return packTileDepth(s.tileID, s.depth);
             }
         );
 
-        thrust::device_ptr<ProjectedSplat> d_splats_ptr(d_outSplats);
+        thrust::device_ptr<ProjectedGaussian_small> d_splats_ptr(d_outSplats);
         thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_splats_ptr);
 
         generateTileRanges_small(d_outSplats, totalTiles, tileSize, vertexCount, d_tileRangeStart, d_tileRangeEnd);

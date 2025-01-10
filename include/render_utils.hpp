@@ -61,7 +61,7 @@ struct float2x2 {
 /**
  * @brief Holds the result of projecting a Gaussian into 2D.
  */
-struct ProjectedSplat {
+struct ProjectedGaussian_small {
     int tileID;        // Which tile in tile-based raster
     float depth;       // z-value for sorting
     int pixelX;        // Final 2D pixel coordinate (u)
@@ -97,7 +97,7 @@ struct ProjectedGaussian {
  */
 __global__
 void projectGaussiansKernel_small(const Gaussian3D* d_gaussians,
-                            ProjectedSplat* d_outSplats,
+                            ProjectedGaussian_small* d_outSplats,
                             int numGaussians,
                             OrthoCameraParams cam,
                             int tile_size = 16);
@@ -112,7 +112,7 @@ void alphaBlend(float4& dest, const float4& src);
  * @brief GPU kernel to blend splats tile-by-tile.
  */
 __global__
-void tiledBlendingKernel_small(const ProjectedSplat*  d_inSplats,
+void tiledBlendingKernel_small(const ProjectedGaussian_small*  d_inSplats,
                          float4*               d_outImage,
                          const int*            d_tileRangeStart,
                          const int*            d_tileRangeEnd,
@@ -122,7 +122,7 @@ void tiledBlendingKernel_small(const ProjectedSplat*  d_inSplats,
 /**
  * @brief CPU function to compute per-tile start/end indices after sorting splats.
  */
-void computeTileRanges_small(std::vector<ProjectedSplat>& h_sortedSplats,
+void computeTileRanges_small(std::vector<ProjectedGaussian_small>& h_sortedSplats,
                        int totalTiles,
                        std::vector<int>& tileRangeStart,
                        std::vector<int>& tileRangeEnd);
@@ -147,7 +147,7 @@ void scatterTileRanges(const int* uniqueTileIDs,
 void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin, const float3& sceneMax);
 
 void generateTileRanges_small(
-    const ProjectedSplat* d_outSplats,
+    const ProjectedGaussian_small* d_outSplats,
     int totalTiles,
     int tileSize,
     int vertexCount,
