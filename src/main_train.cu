@@ -13,8 +13,7 @@
 #include <thrust/iterator/discard_iterator.h>
 
 #include "camera.hpp"
-#include "gaussian.hpp"
-#include "render_utils.hpp"
+#include "gs.hpp"
 #include "cuda_helpers.hpp"
 #include "camera_gpu.cu"
 

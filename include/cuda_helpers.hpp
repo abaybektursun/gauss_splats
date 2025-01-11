@@ -5,6 +5,26 @@
 #include <functional>
 #include <iostream>
 #include <iomanip> // For setw
+#include "gs.hpp"
+
+// Forward declarations
+struct Gaussian3D;
+struct ProjectedGaussian;
+struct TileSplat;
+
+
+struct GPUData {
+    float4* d_image = nullptr;
+    Gaussian3D* d_splats = nullptr;
+    ProjectedGaussian* d_outSplats = nullptr;
+    float3* d_vertices = nullptr;
+    float3* d_originalVertices = nullptr;
+    int* d_tileRangeStart = nullptr;
+    int* d_tileRangeEnd = nullptr;
+    int* d_splatCounts = nullptr;
+    int* d_splatOffsets = nullptr;
+    TileSplat* d_tileSplats = nullptr;
+};
 
 /**
  * @brief A simple CPU helper function to measure time with aligned output.
@@ -33,6 +53,9 @@ inline void measureTime(const std::string& label, const std::function<void()>& r
  */
 __global__
 void sumVertices(float3* vertices, float* result, int vertexCount);
+void releaseGPUData(GPUData& data);
 
 // Optionally add error-check macros or other CUDA helpers here...
 // e.g. #define CUDA_CHECK(x) ...
+
+

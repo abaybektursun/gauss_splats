@@ -3,11 +3,36 @@
 #include <iostream>
 #include <cstdint>
 #include <cuda_runtime.h>
-#include "gaussian.hpp"
-#include "camera.hpp"
 #include <vector> 
 #include <cmath>
 
+#include "camera.hpp"
+#include "cuda_helpers.hpp"
+
+struct GPUData;
+
+/**
+ * @brief Defines a 3D Gaussian structure.
+ */
+struct Gaussian3D {
+    float3 position;  // (x, y, z) μ: Mean position in 3D
+    float3 scale;     // Scaling factors along x, y, z axes
+    float4 rotation;  // Rotation represented as a quaternion
+    float  opacity;   // α: Opacity value between 0 and 1
+    float3 color;     // (r, g, b)
+    float  intensity; // Optional: brightness or weight
+    // Later: spherical harmonics, etc.
+};
+
+struct Gaussian3DGrad {
+    float3 dposition;  // (x, y, z) μ: Mean position in 3D
+    float3 dscale;     // Scaling factors along x, y, z axes
+    float4 drotation;  // Rotation represented as a quaternion
+    float  dopacity;   // α: Opacity value between 0 and 1
+    float3 dcolor;     // (r, g, b)
+    float  dintensity; // Optional: brightness or weight
+    // Later: spherical harmonics, etc.
+};
 
 /**
  * @brief Converts a positive float to its raw 32-bit representation.
@@ -59,20 +84,6 @@ struct float2x2 {
     float2 row2;
 };
 
-/**
- * @brief Holds the result of projecting a Gaussian into 2D.
- */
-struct ProjectedGaussian_small {
-    int tileID;        // Which tile in tile-based raster
-    float depth;       // z-value for sorting
-    int pixelX;        // Final 2D pixel coordinate (u)
-    int pixelY;        // Final 2D pixel coordinate (v)
-    float2x2 sigma2D;  // Screen-space covariance matrix
-    // These are not camera min and max, but the bounding box of the splat
-    int2 bboxMin;      // Bounding box min (u_min, v_min)
-    int2 bboxMax;      // Bounding box max (u_max, v_max)
-    Gaussian3D* gaussian;  // Pointer to the original Gaussian
-};
 
 struct ProjectedGaussian {
     bool invalid=false;      // True if the splat is not visible
@@ -96,36 +107,6 @@ struct TileSplat {
     Gaussian3D* gaussPtr;
 };
 
-struct GPUData {
-    float4* d_image = nullptr;
-    Gaussian3D* d_splats = nullptr;
-    ProjectedGaussian* d_outSplats = nullptr;
-    float3* d_vertices = nullptr;
-    float3* d_originalVertices = nullptr;
-    int* d_tileRangeStart = nullptr;
-    int* d_tileRangeEnd = nullptr;
-    int* d_splatCounts = nullptr;
-    int* d_splatOffsets = nullptr;
-    TileSplat* d_tileSplats = nullptr;
-};
-
-
-void releaseGPUData(GPUData& data);
-/**
- * @brief GPU kernel to project 3D Gaussians into 2D splats.
- *
- * @param d_gaussians    Device pointer to array of Gaussian3D.
- * @param d_outSplats    Device pointer to an output array of ProjectedGaussian_small.
- * @param numGaussians   Number of Gaussians in the array.
- * @param cam            Camera parameters (orthographic).
- * @param tile_size      Side length in pixels of each tile.
- */
-__global__
-void projectGaussiansKernel_small(const Gaussian3D* d_gaussians,
-                            ProjectedGaussian_small* d_outSplats,
-                            int numGaussians,
-                            OrthoCameraParams cam,
-                            int tile_size = 16);
 
 __global__
 void projectGaussiansKernel(const Gaussian3D* d_gaussians,
@@ -139,17 +120,6 @@ void projectGaussiansKernel(const Gaussian3D* d_gaussians,
  */
 __device__ inline
 void alphaBlend(float4& dest, const float4& src);
-
-/**
- * @brief GPU kernel to blend splats tile-by-tile.
- */
-__global__
-void tiledBlendingKernel_small(const ProjectedGaussian_small*  d_inSplats,
-                         float4*               d_outImage,
-                         const int*            d_tileRangeStart,
-                         const int*            d_tileRangeEnd,
-                         OrthoCameraParams     cam,
-                         int                   tile_size);
 
 /**
  * @brief GPU kernel to blend splats tile-by-tile.
@@ -182,13 +152,6 @@ void scatterTileRanges(const int* uniqueTileIDs,
  */
 void orbitCamera(float angleZ, OrthoCameraParams& camera, const float3& sceneMin, const float3& sceneMax);
 
-void generateTileRanges_small(
-    const ProjectedGaussian_small* d_outSplats,
-    int totalTiles,
-    int tileSize,
-    int totalTileSplats,
-    int* d_tileRangeStart,
-    int* d_tileRangeEnd);
 
 
 void generateTileRanges(

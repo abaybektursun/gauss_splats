@@ -3,7 +3,7 @@
 #include <cstring>
 #include <random>
 
-#include "gaussian.hpp"
+#include "gs.hpp"
 #include "tinyply.h"
 
 int read_init_ply(std::vector<float3>& originalVertices, 

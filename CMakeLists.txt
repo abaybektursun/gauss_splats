@@ -47,14 +47,12 @@ include_directories(
 
 add_library(gaussian_lib
     # GPU-related:
-    src/gaussian.cu
-    src/render_utils.cu
-    src/camera_gpu.cu
+    src/gs.cu
 
     # CPU-related:
     src/camera.cpp
     src/tinyply.cpp
-
+    src/cuda_helpers.cu
     src/ply_utils.cu
     src/sdl_utils.cu
 

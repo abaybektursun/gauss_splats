@@ -1,8 +1,8 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <cmath>
-#include <gaussian.hpp>
 #include <stdio.h>
+#include <gs.hpp>
 
 // Simple struct to hold rotation angles
 struct RotationParams {
